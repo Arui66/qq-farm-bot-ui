@@ -70,28 +70,61 @@
                 </div>
               </div>
             </div>
+            <div class="status-item runtime-item">
+              <div class="status-head"><i class="fas fa-clock si time"></i><span class="k">运行时长</span></div>
+              <span id="stat-uptime" class="v">0:00</span>
+            </div>
             <div class="status-item">
-              <div class="status-head"><i class="fas fa-coins si coin"></i><span class="k">金币</span></div>
-              <span id="gold" class="v">0</span>
+              <div class="status-head"><i class="fas fa-flask si total"></i><span class="k">化肥容器</span></div>
+              <div class="status-dual-row">
+                <div class="status-dual-col">
+                  <div class="status-head"><i class="fas fa-flask si total"></i><span class="k">普通</span></div>
+                  <span id="fert-normal-hours" class="v">0.0h</span>
+                </div>
+                <div class="status-dual-col">
+                  <div class="status-head"><i class="fas fa-vial si total"></i><span class="k">有机</span></div>
+                  <span id="fert-organic-hours" class="v">0.0h</span>
+                </div>
+              </div>
+            </div>
+            <div class="status-item">
+              <div class="status-head"><i class="fas fa-star si total"></i><span class="k">收藏点</span></div>
+              <div class="status-dual-row">
+                <div class="status-dual-col">
+                  <div class="status-head"><i class="fas fa-bookmark si total"></i><span class="k">普通</span></div>
+                  <span id="collect-normal" class="v">0</span>
+                </div>
+                <div class="status-dual-col">
+                  <div class="status-head"><i class="fas fa-gem si total"></i><span class="k">典藏</span></div>
+                  <span id="collect-rare" class="v">0</span>
+                </div>
+              </div>
+            </div>
+            <div class="status-item stretch gold-card">
+              <div class="status-dual-row gold-split">
+                <div class="status-dual-col">
+                  <div class="status-head"><i class="fas fa-coins si coin"></i><span class="k">金币</span></div>
+                  <span id="gold" class="v">0</span>
+                </div>
+                <div class="status-dual-col">
+                  <div class="status-head"><i class="fas fa-ticket-alt si total"></i><span class="k">点券</span></div>
+                  <span id="coupon" class="v">0</span>
+                </div>
+              </div>
               <span id="stat-gold" class="s gain-gold">+0</span>
             </div>
             <div class="status-item stretch">
               <div class="status-head"><i class="fas fa-bolt si exp"></i><span class="k">等级 / 经验</span></div>
               <span id="level" class="v">Lv0</span>
-              <div class="progress"><div id="exp-fill" class="progress-fill" style="width:0%"></div></div>
+              <div class="progress progress-half"><div id="exp-fill" class="progress-fill" style="width:0%"></div></div>
               <div class="exp-inline">
                 <span id="exp-num" class="s">0/0</span>
                 <span id="stat-exp" class="s">+0</span>
               </div>
-              <span id="time-to-level" class="s"></span>
-            </div>
-            <div class="status-item">
-              <div class="status-head"><i class="fas fa-clock si time"></i><span class="k">运行时长</span></div>
-              <span id="stat-uptime" class="v">0:00</span>
-            </div>
-            <div class="status-item">
-              <div class="status-head"><i class="fas fa-gauge si rate"></i><span class="k">经验效率</span></div>
-              <span id="exp-rate" class="v">0/时</span>
+              <div class="exp-meta-row">
+                <span class="s">经验效率: <span id="exp-rate">0/时</span></span>
+                <span id="time-to-level" class="s"></span>
+              </div>
             </div>
           </div>
 
@@ -125,6 +158,8 @@
                     <option value="sell_success">出售成功</option>
                     <option value="upgrade_land">土地升级</option>
                     <option value="unlock_land">土地解锁</option>
+                    <option value="task_scan">获取任务</option>
+                    <option value="task_claim">完成任务</option>
                   </select>
                   <select id="logs-warn-filter" class="form-control log-filter-select"><option value="">级别</option><option value="0">普通</option><option value="1">警告</option></select>
                   <input id="logs-time-from-filter" class="form-control log-filter-input" type="datetime-local" title="开始时间">

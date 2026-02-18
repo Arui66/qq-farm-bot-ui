@@ -45,6 +45,7 @@ function startAdminServer(dataProvider) {
 
     const panelDir = path.join(__dirname, '..', 'panel');
     app.use(express.static(panelDir));
+    app.use('/game-config', express.static(path.join(__dirname, '..', 'gameConfig')));
 
     // 登录与鉴权
     app.post('/api/login', (req, res) => {

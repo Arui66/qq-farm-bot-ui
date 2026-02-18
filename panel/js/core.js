@@ -70,6 +70,8 @@ const LOG_EVENT_LABELS = {
     upgrade_land: '土地升级',
     unlock_land: '土地解锁',
     tick: '调度执行',
+    task_scan: '获取任务',
+    task_claim: '完成任务',
     api_error: '请求失败',
 };
 
@@ -306,6 +308,7 @@ function syncOpsRowsMode() {
 function resetDashboardStats() {
     const setText = (id, v) => { const el = $(id); if (el) el.textContent = v; };
     setText('gold', '0');
+    setText('coupon', '0');
     setText('stat-gold', '+0');
     setText('level', 'Lv0');
     setText('exp-rate', '0/时');
@@ -313,6 +316,10 @@ function resetDashboardStats() {
     setText('exp-num', '0/0');
     setText('time-to-level', '');
     setText('stat-uptime', '0:00');
+    setText('fert-normal-hours', '0.0h');
+    setText('fert-organic-hours', '0.0h');
+    setText('collect-normal', '0');
+    setText('collect-rare', '0');
     const fill = $('exp-fill');
     if (fill) fill.style.width = '0%';
     expHistory = [];

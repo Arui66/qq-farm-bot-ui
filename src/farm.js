@@ -8,7 +8,7 @@ const { types } = require('./proto');
 const { sendMsgAsync, getUserState, networkEvents } = require('./network');
 const { toLong, toNum, getServerTimeSec, toTimeSec, log, logWarn, sleep } = require('./utils');
 const { recordOperation } = require('./stats');
-const { getPlantNameBySeedId, getPlantName, getPlantExp, formatGrowTime, getPlantGrowTime, getAllSeeds } = require('./gameConfig');
+const { getPlantNameBySeedId, getPlantName, getPlantExp, formatGrowTime, getPlantGrowTime, getAllSeeds, getPlantById, getSeedImageBySeedId } = require('./gameConfig');
 const { isAutomationOn, getPreferredSeed, getAutomation, getPlantingStrategy } = require('./store');
 
 // ============ 内部状态 ============
@@ -379,6 +379,9 @@ async function getLandsDetail() {
             const phaseVal = currentPhase.phase;
             const plantId = toNum(plant.id);
             const plantName = getPlantName(plantId) || plant.name || '未知';
+            const plantCfg = getPlantById(plantId);
+            const seedId = toNum(plantCfg && plantCfg.seed_id);
+            const seedImage = seedId > 0 ? getSeedImageBySeedId(seedId) : '';
             const phaseName = PHASE_NAMES[phaseVal] || '';
             const maturePhase = Array.isArray(plant.phases)
                 ? plant.phases.find((p) => p && toNum(p.phase) === PlantPhase.MATURE)
@@ -400,6 +403,8 @@ async function getLandsDetail() {
                 unlocked: true,
                 status: landStatus,
                 plantName,
+                seedId,
+                seedImage,
                 phaseName,
                 matureInSec,
                 needWater,
@@ -707,7 +712,9 @@ async function checkFarm() {
 async function runFarmOperation(opType) {
     const landsReply = await getAllLands();
     if (!landsReply.lands || landsReply.lands.length === 0) {
-        log('农场', '没有土地数据');
+        if (opType !== 'all') {
+            log('农场', '没有土地数据');
+        }
         return { hadWork: false, actions: [] };
     }
 
@@ -839,7 +846,7 @@ async function runFarmOperation(opType) {
 
     // 日志
     const actionStr = actions.length > 0 ? ` → ${actions.join('/')}` : '';
-    if (actions.length > 0 || opType === 'all') { // 手动操作即使没动作也可能想看日志，自动操作只在有动作时显示
+    if (actions.length > 0) {
          log('农场', `[${statusParts.join(' ')}]${actionStr}`, {
              module: 'farm', event: 'farm_cycle', opType, actions
          });

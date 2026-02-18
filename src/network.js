@@ -26,6 +26,7 @@ const userState = {
     level: 0,
     gold: 0,
     exp: 0,
+    coupon: 0, // 点券(ID:1002)
 };
 
 function getUserState() { return userState; }
@@ -218,6 +219,13 @@ function handleNotify(msg) {
                         updateStatusGold(userState.gold);
                         if (delta !== 0) {
                             log('物品', `金币 ${delta > 0 ? '+' : ''}${delta} (当前: ${userState.gold})`);
+                        }
+                    } else if (id === 1002) {
+                        // 点券
+                        if (count > 0) {
+                            userState.coupon = count;
+                        } else if (delta !== 0) {
+                            userState.coupon = Math.max(0, Number(userState.coupon || 0) + delta);
                         }
                     }
                 }

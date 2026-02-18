@@ -9,7 +9,7 @@ const { toLong, toNum, getServerTimeSec, log, logWarn, sleep } = require('./util
 const { getCurrentPhase, setOperationLimitsCallback } = require('./farm');
 const { recordOperation } = require('./stats');
 const { isAutomationOn, getFriendQuietHours } = require('./store');
-const { getPlantName } = require('./gameConfig');
+const { getPlantName, getPlantById, getSeedImageBySeedId } = require('./gameConfig');
 
 // ============ 内部状态 ============
 let isCheckingFriends = false;
@@ -457,7 +457,15 @@ async function getFriendsList() {
                     weedNum: toNum(f.plant.weed_num),
                     insectNum: toNum(f.plant.insect_num),
                 } : null,
-            }));
+            }))
+            .sort((a, b) => {
+                // 固定顺序：先按名称，再按 GID，避免刷新时顺序抖动
+                const an = String(a.name || '');
+                const bn = String(b.name || '');
+                const byName = an.localeCompare(bn, 'zh-CN');
+                if (byName !== 0) return byName;
+                return Number(a.gid || 0) - Number(b.gid || 0);
+            });
     } catch (e) {
         return [];
     }
@@ -507,6 +515,9 @@ async function getFriendLandsDetail(friendGid) {
             const phaseVal = currentPhase.phase;
             const plantId = toNum(plant.id);
             const plantName = getPlantName(plantId) || plant.name || '未知';
+            const plantCfg = getPlantById(plantId);
+            const seedId = toNum(plantCfg && plantCfg.seed_id);
+            const seedImage = seedId > 0 ? getSeedImageBySeedId(seedId) : '';
             const phaseName = PHASE_NAMES[phaseVal] || '';
             const maturePhase = Array.isArray(plant.phases)
                 ? plant.phases.find((p) => p && toNum(p.phase) === PlantPhase.MATURE)
@@ -522,6 +533,8 @@ async function getFriendLandsDetail(friendGid) {
                 unlocked: true,
                 status: landStatus,
                 plantName,
+                seedId,
+                seedImage,
                 phaseName,
                 level,
                 matureInSec,

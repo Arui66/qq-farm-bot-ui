@@ -51,7 +51,7 @@ function log(tag, msg) {
     const time = new Date().toLocaleString();
     console.log(`[${tag}] ${msg}`);
     GLOBAL_LOGS.push({ time, tag, msg });
-    if (GLOBAL_LOGS.length > 200) GLOBAL_LOGS.shift();
+    if (GLOBAL_LOGS.length > 1000) GLOBAL_LOGS.shift();
 }
 
 function addAccountLog(action, msg, accountId = '', accountName = '', extra = {}) {
@@ -246,9 +246,9 @@ function handleWorkerMessage(accountId, msg) {
         };
         logEntry._searchText = `${logEntry.msg || ''} ${logEntry.tag || ''} ${JSON.stringify(logEntry.meta || {})}`.toLowerCase();
         worker.logs.push(logEntry);
-        if (worker.logs.length > 200) worker.logs.shift();
+        if (worker.logs.length > 1000) worker.logs.shift();
         GLOBAL_LOGS.push(logEntry);
-        if (GLOBAL_LOGS.length > 200) GLOBAL_LOGS.shift();
+        if (GLOBAL_LOGS.length > 1000) GLOBAL_LOGS.shift();
     } else if (msg.type === 'error') {
         log('错误', `账号[${accountId}]进程报错: ${msg.error}`);
     } else if (msg.type === 'account_kicked') {

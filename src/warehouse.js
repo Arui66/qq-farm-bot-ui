@@ -7,7 +7,7 @@ const { types } = require('./proto');
 const { sendMsgAsync, networkEvents, getUserState } = require('./network');
 const { toLong, toNum, log, logWarn, sleep } = require('./utils');
 const { updateStatusGold } = require('./status');
-const { getFruitName, getPlantByFruitId, getPlantBySeedId, getItemById } = require('./gameConfig');
+const { getFruitName, getPlantByFruitId, getPlantBySeedId, getItemById, getItemImageById } = require('./gameConfig');
 const { isAutomationOn } = require('./store');
 
 const SELL_BATCH_SIZE = 15;
@@ -99,10 +99,11 @@ async function getCurrentTotalsFromBag() {
 async function getBagDetail() {
     const bagReply = await getBag();
     const rawItems = getBagItems(bagReply);
-    const items = (rawItems || []).map((it) => {
+    const merged = new Map();
+    for (const it of (rawItems || [])) {
         const id = toNum(it.id);
         const count = toNum(it.count);
-        const uid = it.uid ? toNum(it.uid) : 0;
+        if (id <= 0 || count <= 0) continue;
         const info = getItemById(id) || null;
         let name = info && info.name ? String(info.name) : '';
         let category = 'item';
@@ -122,24 +123,35 @@ async function getBagDetail() {
         }
         if (!name) name = `物品${id}`;
         const interactionType = info && info.interaction_type ? String(info.interaction_type) : '';
-        let hoursText = '';
-        if (interactionType === 'fertilizerbucket' && count > 0) {
-            // 游戏显示更接近截断到 1 位小数（非四舍五入）
-            const hoursFloor1 = Math.floor((count / 3600) * 10) / 10;
-            hoursText = `${hoursFloor1.toFixed(1)}小时`;
+
+        if (!merged.has(id)) {
+            merged.set(id, {
+                id,
+                count: 0,
+                uid: 0, // 合并展示后 UID 不再有意义
+                name,
+                image: getItemImageById(id),
+                category,
+                itemType: info ? (Number(info.type) || 0) : 0,
+                price: info ? (Number(info.price) || 0) : 0,
+                level: info ? (Number(info.level) || 0) : 0,
+                interactionType,
+                hoursText: '',
+            });
         }
-        return {
-            id,
-            count,
-            uid,
-            name,
-            category,
-            itemType: info ? (Number(info.type) || 0) : 0,
-            price: info ? (Number(info.price) || 0) : 0,
-            level: info ? (Number(info.level) || 0) : 0,
-            interactionType,
-            hoursText,
-        };
+        const row = merged.get(id);
+        row.count += count;
+    }
+
+    const items = Array.from(merged.values()).map((row) => {
+        if (row.interactionType === 'fertilizerbucket' && row.count > 0) {
+            // 游戏显示更接近截断到 1 位小数（非四舍五入）
+            const hoursFloor1 = Math.floor((row.count / 3600) * 10) / 10;
+            row.hoursText = `${hoursFloor1.toFixed(1)}小时`;
+        } else {
+            row.hoursText = '';
+        }
+        return row;
     });
     items.sort((a, b) => {
         const ca = Number(a.count || 0);

@@ -68,6 +68,7 @@ function switchAccount(id) {
     renderOpsList({});
     // 刷新所有数据
     pollStatus();
+    pollFertilizerBuckets(true);
     pollLogs();
     if ($('page-farm').classList.contains('active')) loadFarm();
     if ($('page-friends').classList.contains('active')) loadFriends();
@@ -83,6 +84,7 @@ document.addEventListener('click', () => $('account-dropdown').classList.remove(
 // ============ 核心轮询 ============
 // 限制经验效率更新频率 (每10秒)
 let lastRateUpdate = 0;
+let lastFertilizerPollAt = 0;
 const LOG_VIRTUAL_ROW_HEIGHT = 28;
 const LOG_VIRTUAL_OVERSCAN = 10;
 let logVirtualItems = [];
@@ -133,6 +135,35 @@ function renderVirtualLogsWindow(wrap) {
     wrap.innerHTML = `<div style="height:${topPad}px"></div>${rows}<div style="height:${bottomPad}px"></div>`;
 }
 
+function formatBucketHoursText(item) {
+    if (!item) return '0.0h';
+    const raw = String(item.hoursText || '').trim();
+    if (raw) return raw.replace('小时', 'h');
+    const count = Number(item.count || 0);
+    const hoursFloor1 = Math.floor((count / 3600) * 10) / 10;
+    return `${hoursFloor1.toFixed(1)}h`;
+}
+
+async function pollFertilizerBuckets(force = false) {
+    if (!currentAccountId) return;
+    const now = Date.now();
+    if (!force && now - lastFertilizerPollAt < 15000) return;
+    lastFertilizerPollAt = now;
+    const key = `pollFertilizerBuckets:${currentAccountId}`;
+    return runDedupedRequest(key, async () => {
+        const data = await api('/api/bag');
+        const items = (data && Array.isArray(data.items)) ? data.items : [];
+        const normal = items.find(it => Number(it.id || 0) === 1011);
+        const organic = items.find(it => Number(it.id || 0) === 1012);
+        const collectNormal = items.find(it => Number(it.id || 0) === 3001);
+        const collectRare = items.find(it => Number(it.id || 0) === 3002);
+        updateValueWithAnim('fert-normal-hours', formatBucketHoursText(normal));
+        updateValueWithAnim('fert-organic-hours', formatBucketHoursText(organic));
+        updateValueWithAnim('collect-normal', String(Number((collectNormal && collectNormal.count) || 0)));
+        updateValueWithAnim('collect-rare', String(Number((collectRare && collectRare.count) || 0)));
+    });
+}
+
 async function pollStatus() {
     if (!currentAccountId) {
         $('conn-text').textContent = '请添加账号';
@@ -169,6 +200,8 @@ async function pollStatus() {
     $('level').textContent = data.status?.level ? 'Lv' + data.status.level : '-';
     
     updateValueWithAnim('gold', String(data.status?.gold ?? '-'), 'value-changed-gold');
+    updateValueWithAnim('coupon', String(data.status?.coupon ?? 0));
+    pollFertilizerBuckets();
     
     if (data.uptime !== undefined) {
         lastServerUptime = data.uptime;

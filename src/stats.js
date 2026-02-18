@@ -154,6 +154,7 @@ function getStats(statusData, userState, connected, limits) {
             name: userObj.name,
             level: statusObj.level || userObj.level || 0,
             gold: currentGold,
+            coupon: Number.isFinite(Number(userObj.coupon)) ? Number(userObj.coupon) : 0,
             exp: currentExp,
             platform: statusObj.platform || userObj.platform || 'qq',
         },

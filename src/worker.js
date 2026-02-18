@@ -9,9 +9,9 @@ const { checkFriends, startFriendCheckLoop, stopFriendCheckLoop, refreshFriendCh
 const { initTaskSystem, cleanupTaskSystem, checkAndClaimTasks } = require('./task');
 const { initStatusBar, cleanupStatusBar, setStatusPlatform, statusData } = require('./status');
 const { recordGoldExp, getStats, setInitialValues, resetSessionGains, recordOperation } = require('./stats');
-const { sellAllFruits, debugSellFruits } = require('./warehouse');
+const { sellAllFruits, debugSellFruits, getBag, getBagItems } = require('./warehouse');
 const { processInviteCodes } = require('./invite');
-const { setLogHook, log } = require('./utils');
+const { setLogHook, log, toNum } = require('./utils');
 const { setRecordGoldExpHook } = require('./status');
 const { getLevelExpProgress } = require('./gameConfig');
 const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot } = require('./store');
@@ -284,6 +284,23 @@ async function startBot(config) {
             }
         };
         networkEvents.on('farmHarvested', onFarmHarvested);
+
+        // 登录后主动拉一次背包，初始化点券(ID:1002)数量
+        try {
+            const bagReply = await getBag();
+            const items = getBagItems(bagReply);
+            let coupon = 0;
+            for (const it of (items || [])) {
+                if (toNum(it && it.id) === 1002) {
+                    coupon = toNum(it.count);
+                    break;
+                }
+            }
+            const state = getUserState();
+            state.coupon = Math.max(0, coupon);
+        } catch (e) {
+            // ignore
+        }
 
         // 登录成功后启动各模块
         await processInviteCodes();
