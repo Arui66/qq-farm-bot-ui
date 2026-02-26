@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch, watchEffect } from 'vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
@@ -9,6 +9,7 @@ import BaseSwitch from '@/components/ui/BaseSwitch.vue'
 import { useAccountStore } from '@/stores/account'
 import { useFarmStore } from '@/stores/farm'
 import { useSettingStore } from '@/stores/setting'
+import api from '@/api'
 
 const settingStore = useSettingStore()
 const accountStore = useAccountStore()
@@ -68,6 +69,7 @@ const localSettings = ref({
     share_reward: false,
     vip_gift: false,
     month_card: false,
+    open_server_gift: false,
     fertilizer: 'none',
   },
 })
@@ -118,6 +120,7 @@ function syncLocalSettings() {
         share_reward: false,
         vip_gift: false,
         month_card: false,
+        open_server_gift: false,
         fertilizer: 'none',
       }
     }
@@ -141,6 +144,7 @@ function syncLocalSettings() {
         share_reward: false,
         vip_gift: false,
         month_card: false,
+        open_server_gift: false,
         fertilizer: 'none',
       }
       localSettings.value.automation = {
@@ -227,6 +231,56 @@ const preferredSeedOptions = computed(() => {
     })))
   }
   return options
+})
+
+const analyticsSortByMap: Record<string, string> = {
+  max_exp: 'exp',
+  max_fert_exp: 'fert',
+  max_profit: 'profit',
+  max_fert_profit: 'fert_profit',
+}
+
+const strategyPreviewLabel = ref<string | null>(null)
+
+watchEffect(async () => {
+  const strategy = localSettings.value.plantingStrategy
+  if (strategy === 'preferred') {
+    strategyPreviewLabel.value = null
+    return
+  }
+  if (!seeds.value || seeds.value.length === 0) {
+    strategyPreviewLabel.value = null
+    return
+  }
+  const available = seeds.value.filter(s => !s.locked && !s.soldOut)
+  if (available.length === 0) {
+    strategyPreviewLabel.value = '暂无可用种子'
+    return
+  }
+  if (strategy === 'level') {
+    const best = [...available].sort((a, b) => b.requiredLevel - a.requiredLevel)[0]
+    strategyPreviewLabel.value = best ? `${best.requiredLevel}级 ${best.name}` : null
+    return
+  }
+  const sortBy = analyticsSortByMap[strategy]
+  if (sortBy) {
+    try {
+      const res = await api.get(`/api/analytics?sort=${sortBy}`)
+      const rankings: any[] = res.data.ok ? (res.data.data || []) : []
+      const availableIds = new Set(available.map(s => s.seedId))
+      const match = rankings.find(r => availableIds.has(Number(r.seedId)))
+      if (match) {
+        const seed = available.find(s => s.seedId === Number(match.seedId))
+        strategyPreviewLabel.value = seed ? `${seed.requiredLevel}级 ${seed.name}` : null
+      }
+      else {
+        strategyPreviewLabel.value = '暂无匹配种子'
+      }
+    }
+    catch {
+      strategyPreviewLabel.value = null
+    }
+  }
 })
 
 async function saveAccountSettings() {
@@ -326,11 +380,17 @@ async function handleSaveOffline() {
               :options="plantingStrategyOptions"
             />
             <BaseSelect
+              v-if="localSettings.plantingStrategy === 'preferred'"
               v-model="localSettings.preferredSeedId"
               label="优先种植种子"
-              :disabled="localSettings.plantingStrategy !== 'preferred'"
               :options="preferredSeedOptions"
             />
+            <div v-else class="flex flex-col gap-1">
+              <span class="text-xs text-gray-500 dark:text-gray-400">策略选种预览</span>
+              <div class="flex h-9 items-center rounded-md border border-gray-200 bg-gray-50 px-3 text-sm text-gray-600 dark:border-gray-600 dark:bg-gray-700/50 dark:text-gray-300">
+                {{ strategyPreviewLabel ?? '加载中...' }}
+              </div>
+            </div>
           </div>
 
           <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -406,8 +466,9 @@ async function handleSaveOffline() {
             <BaseSwitch v-model="localSettings.automation.share_reward" label="自动分享奖励" />
             <BaseSwitch v-model="localSettings.automation.vip_gift" label="自动VIP礼包" />
             <BaseSwitch v-model="localSettings.automation.month_card" label="自动月卡奖励" />
-            <BaseSwitch v-model="localSettings.automation.fertilizer_gift" label="自动购买化肥礼包" />
-            <BaseSwitch v-model="localSettings.automation.fertilizer_buy" label="自动点券买化肥" />
+            <BaseSwitch v-model="localSettings.automation.open_server_gift" label="自动开服红包" />
+            <BaseSwitch v-model="localSettings.automation.fertilizer_gift" label="自动填充化肥" />
+            <BaseSwitch v-model="localSettings.automation.fertilizer_buy" label="自动购买化肥" />
           </div>
 
           <!-- Sub-controls -->

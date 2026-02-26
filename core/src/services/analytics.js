@@ -11,7 +11,7 @@ function parseGrowTime(growPhases) {
     for (const phase of phases) {
         const match = phase.match(/:(\d+)$/);
         if (match) {
-            totalTime += parseInt(match[1]);
+            totalTime += Number.parseInt(match[1]);
         }
     }
     return totalTime;
@@ -23,7 +23,7 @@ function parseNormalFertilizerReduceSec(growPhases) {
     if (!phases.length) return 0;
     const first = phases[0];
     const match = first.match(/:(\d+)$/);
-    return match ? (parseInt(match[1], 10) || 0) : 0;
+    return match ? (Number.parseInt(match[1], 10) || 0) : 0;
 }
 
 function formatTime(seconds) {
@@ -36,7 +36,7 @@ function formatTime(seconds) {
 
 function getPlantRankings(sortBy = 'exp') {
     const plants = getAllPlants();
-    console.log(`[分析] 获取到 ${plants.length} 种作物`);
+    console.warn(`[分析] 获取到 ${plants.length} 种作物`);
     
     // 筛选普通作物
     const normalPlants = plants.filter(p => {
@@ -45,7 +45,7 @@ function getPlantRankings(sortBy = 'exp') {
         // 放宽条件，只要有种子ID且有生长阶段数据
         return p.seed_id > 0 && p.grow_phases;
     });
-    console.log(`[分析] 筛选出 ${normalPlants.length} 种普通作物`);
+    console.warn(`[分析] 筛选出 ${normalPlants.length} 种普通作物`);
 
 
 
@@ -57,7 +57,7 @@ function getPlantRankings(sortBy = 'exp') {
         const isTwoSeason = seasons === 2;
         const growTime = isTwoSeason ? (baseGrowTime * 1.5) : baseGrowTime;
         
-        const harvestExpBase = parseInt(plant.exp) || 0;
+        const harvestExpBase = Number.parseInt(plant.exp) || 0;
         const harvestExp = isTwoSeason ? (harvestExpBase * 2) : harvestExpBase;
         const expPerHour = (harvestExp / growTime) * 3600;
         // 普通化肥：直接减少第一生长阶段时长（reduceSec）
@@ -91,11 +91,11 @@ function getPlantRankings(sortBy = 'exp') {
             growTimeStr: formatTime(growTime),
             reduceSec: reduceSecBase,
             reduceSecApplied,
-            expPerHour: parseFloat(expPerHour.toFixed(2)),
-            normalFertilizerExpPerHour: parseFloat(normalFertilizerExpPerHour.toFixed(2)),
-            goldPerHour: parseFloat(goldPerHour.toFixed(2)), // 毛收益/时
-            profitPerHour: parseFloat(profitPerHour.toFixed(2)), // 净收益/时
-            normalFertilizerProfitPerHour: parseFloat(normalFertilizerProfitPerHour.toFixed(2)), // 普通肥净收益/时
+            expPerHour: Number.parseFloat(expPerHour.toFixed(2)),
+            normalFertilizerExpPerHour: Number.parseFloat(normalFertilizerExpPerHour.toFixed(2)),
+            goldPerHour: Number.parseFloat(goldPerHour.toFixed(2)), // 毛收益/时
+            profitPerHour: Number.parseFloat(profitPerHour.toFixed(2)), // 净收益/时
+            normalFertilizerProfitPerHour: Number.parseFloat(normalFertilizerProfitPerHour.toFixed(2)), // 普通肥净收益/时
             income,
             netProfit,
             fruitId,

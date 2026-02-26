@@ -10,12 +10,12 @@
  * 我们使用 ReportArkClickRequest 来模拟已登录状态下的分享链接点击
  */
 
-const fs = require('fs');
-const { types } = require('../utils/proto');
-const { sendMsgAsync } = require('../utils/network');
-const { toLong, log, logWarn, sleep } = require('../utils/utils');
 const { CONFIG } = require('../config/config');
 const { getShareFilePath } = require('../config/runtime-paths');
+const { sendMsgAsync } = require('../utils/network');
+const { types } = require('../utils/proto');
+const { toLong, log, logWarn, sleep } = require('../utils/utils');
+const { readTextFile, writeTextFileAtomic } = require('./json-db');
 
 /**
  * 解析分享链接，提取 uid 和 openid
@@ -42,13 +42,9 @@ function parseShareLink(link) {
  */
 function readShareFile() {
     const shareFilePath = getShareFilePath();
-    
-    if (!fs.existsSync(shareFilePath)) {
-        return [];
-    }
-    
+
     try {
-        const content = fs.readFileSync(shareFilePath, 'utf8');
+        const content = readTextFile(shareFilePath, '');
         const lines = content.split('\n')
             .map(line => line.trim())
             .filter(line => line.length > 0 && line.includes('openid='));
@@ -145,9 +141,9 @@ async function processInviteCodes() {
 function clearShareFile() {
     const shareFilePath = getShareFilePath();
     try {
-        fs.writeFileSync(shareFilePath, '', 'utf8');
+        writeTextFileAtomic(shareFilePath, '');
         log('邀请', '已清空 share.txt');
-    } catch (e) {
+    } catch {
         // 静默失败
     }
 }

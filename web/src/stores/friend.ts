@@ -7,6 +7,7 @@ export const useFriendStore = defineStore('friend', () => {
   const loading = ref(false)
   const friendLands = ref<Record<string, any[]>>({})
   const friendLandsLoading = ref<Record<string, boolean>>({})
+  const blacklist = ref<number[]>([])
 
   async function fetchFriends(accountId: string) {
     if (!accountId)
@@ -22,6 +23,31 @@ export const useFriendStore = defineStore('friend', () => {
     }
     finally {
       loading.value = false
+    }
+  }
+
+  async function fetchBlacklist(accountId: string) {
+    if (!accountId)
+      return
+    try {
+      const res = await api.get('/api/friend-blacklist', {
+        headers: { 'x-account-id': accountId },
+      })
+      if (res.data.ok) {
+        blacklist.value = res.data.data || []
+      }
+    }
+    catch { /* ignore */ }
+  }
+
+  async function toggleBlacklist(accountId: string, gid: number) {
+    if (!accountId || !gid)
+      return
+    const res = await api.post('/api/friend-blacklist/toggle', { gid }, {
+      headers: { 'x-account-id': accountId },
+    })
+    if (res.data.ok) {
+      blacklist.value = res.data.data || []
     }
   }
 
@@ -48,9 +74,7 @@ export const useFriendStore = defineStore('friend', () => {
     await api.post(`/api/friend/${friendId}/op`, { opType }, {
       headers: { 'x-account-id': accountId },
     })
-    // Refresh friend list to update status counts
     await fetchFriends(accountId)
-    // If lands are open, refresh lands too
     if (friendLands.value[friendId]) {
       await fetchFriendLands(accountId, friendId)
     }
@@ -61,7 +85,10 @@ export const useFriendStore = defineStore('friend', () => {
     loading,
     friendLands,
     friendLandsLoading,
+    blacklist,
     fetchFriends,
+    fetchBlacklist,
+    toggleBlacklist,
     fetchFriendLands,
     operate,
   }

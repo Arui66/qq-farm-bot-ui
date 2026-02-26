@@ -2,9 +2,11 @@ import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import api from '@/api'
 
+const THEME_KEY = 'ui_theme'
+
 export const useAppStore = defineStore('app', () => {
   const sidebarOpen = ref(false)
-  const isDark = ref(false)
+  const isDark = ref(localStorage.getItem(THEME_KEY) === 'dark')
 
   function toggleSidebar() {
     sidebarOpen.value = !sidebarOpen.value
@@ -24,10 +26,11 @@ export const useAppStore = defineStore('app', () => {
       if (res.data.ok && res.data.data.ui) {
         const theme = res.data.data.ui.theme
         isDark.value = theme === 'dark'
+        localStorage.setItem(THEME_KEY, theme)
       }
     }
-    catch (e) {
-      console.error('Failed to fetch theme:', e)
+    catch {
+      // 未登录时静默失败，使用本地缓存值
     }
   }
 
@@ -35,6 +38,7 @@ export const useAppStore = defineStore('app', () => {
     try {
       await api.post('/api/settings/theme', { theme })
       isDark.value = theme === 'dark'
+      localStorage.setItem(THEME_KEY, theme)
     }
     catch (e) {
       console.error('Failed to set theme:', e)
@@ -46,14 +50,11 @@ export const useAppStore = defineStore('app', () => {
     setTheme(newTheme)
   }
 
-  // Watch for changes in isDark and apply theme class
   watch(isDark, (val) => {
-    if (val) {
+    if (val)
       document.documentElement.classList.add('dark')
-    }
-    else {
+    else
       document.documentElement.classList.remove('dark')
-    }
   }, { immediate: true })
 
   return {

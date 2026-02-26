@@ -1,15 +1,18 @@
 name: ci
 
-# https://help.github.com/en/articles/workflow-syntax-for-github-actions#on
 on:
   workflow_dispatch:
   push:
     branches:
       - main
       - refactor
+  pull_request:
+    branches:
+      - main
+      - refactor
 
 jobs:
-  build:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -17,20 +20,46 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
           cache: 'pnpm'
 
       - name: Install Dependencies
-        run: |
-          pnpm install
+        run: pnpm install --frozen-lockfile
 
-      - name: Build
+      - name: Lint Web
+        run: pnpm -C web lint
+
+      - name: Lint Core
+        run: pnpm -C core exec eslint "src/**/*.js" "client.js"
+
+      - name: Build Web
+        run: pnpm build:web
+
+  package:
+    if: github.event_name != 'pull_request'
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Release
         run: pnpm package:release
 
       - name: List Artifacts

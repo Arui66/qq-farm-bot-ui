@@ -39,6 +39,11 @@ api.interceptors.response.use((response) => {
       }
     }
     else if (error.response.status >= 500) {
+      const backendError = String(error.response.data?.error || error.response.data?.message || '')
+      // 后端运行态可预期错误：不弹全局500，交给页面状态处理
+      if (backendError === '账号未运行' || backendError === 'API Timeout') {
+        return Promise.reject(error)
+      }
       toast.error(`服务器错误: ${error.response.status} ${error.response.statusText}`)
     }
     else {

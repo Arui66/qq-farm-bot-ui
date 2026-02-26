@@ -2,8 +2,8 @@
  * 分享奖励
  */
 
-const { types } = require('../utils/proto');
 const { sendMsgAsync } = require('../utils/network');
+const { types } = require('../utils/proto');
 const { log, toNum } = require('../utils/utils');
 
 const DAILY_KEY = 'daily_share';

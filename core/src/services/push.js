@@ -20,7 +20,7 @@ function assertRequiredText(name, value) {
  * @param {string} payload.token 必填 推送 token
  * @param {string} payload.title 必填 推送标题
  * @param {string} payload.content 必填 推送内容
- * @returns {Promise<{ok: boolean, code: string, msg: string, raw: any}>}
+ * @returns {Promise<{ok: boolean, code: string, msg: string, raw: any}>} 推送结果
  */
 async function sendPushooMessage(payload = {}) {
     const channel = assertRequiredText('channel', payload.channel);

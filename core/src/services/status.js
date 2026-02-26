@@ -1,3 +1,4 @@
+const process = require('node:process');
 /**
  * 状态栏 - 在终端固定位置显示用户状态
  */
@@ -21,7 +22,7 @@ const statusData = {
 const STATUS_LINES = 2;  // 状态栏占用行数
 
 // ============ ANSI 转义码 ============
-const ESC = '\x1b';
+const ESC = '\x1B';
 const SAVE_CURSOR = `${ESC}7`;
 const RESTORE_CURSOR = `${ESC}8`;
 const MOVE_TO = (row, col) => `${ESC}[${row};${col}H`;
@@ -111,7 +112,7 @@ function renderStatusBar() {
     }
 
     // 第一行：平台 | 昵称 | 等级 | 金币 | 经验
-    const line1 = `${platformStr} | ${nameStr} | ${levelStr} | ${goldStr}${expStr ? ' | ' + expStr : ''}`;
+    const line1 = `${platformStr} | ${nameStr} | ${levelStr} | ${goldStr}${expStr ? ` | ${  expStr}` : ''}`;
 
     // 第二行：分隔线
     const width = process.stdout.columns || 80;
@@ -141,7 +142,7 @@ function updateStatus(data) {
     if (changed) {
         if (statusEnabled) renderStatusBar();
         if (recordGoldExpHook && (data.gold !== undefined || data.exp !== undefined)) {
-            try { recordGoldExpHook(statusData.gold, statusData.exp); } catch (e) {}
+            try { recordGoldExpHook(statusData.gold, statusData.exp); } catch {}
         }
     }
 }

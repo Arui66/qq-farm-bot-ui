@@ -1,13 +1,17 @@
+const { Buffer } = require('node:buffer');
+const EventEmitter = require('node:events');
 /**
  * WebSocket 网络层 - 连接/消息编解码/登录/心跳
  */
 
+const process = require('node:process');
 const WebSocket = require('ws');
-const EventEmitter = require('events');
 const { CONFIG } = require('../config/config');
+const { createScheduler } = require('../services/scheduler');
+const { updateStatusFromLogin, updateStatusGold, updateStatusLevel } = require('../services/status');
+const { recordOperation } = require('../services/stats');
 const { types } = require('./proto');
 const { toLong, toNum, syncServerTime, log, logWarn } = require('./utils');
-const { updateStatusFromLogin, updateStatusGold, updateStatusLevel } = require('../services/status');
 
 // ============ 事件发射器 (用于推送通知) ============
 const networkEvents = new EventEmitter();
@@ -16,9 +20,9 @@ const networkEvents = new EventEmitter();
 let ws = null;
 let clientSeq = 1;
 let serverSeq = 0;
-let heartbeatTimer = null;
-let pendingCallbacks = new Map();
+const pendingCallbacks = new Map();
 let wsErrorState = { code: 0, at: 0, message: '' };
+const networkScheduler = createScheduler('network');
 
 // ============ 用户状态 (登录后设置) ============
 const userState = {
@@ -81,21 +85,22 @@ function sendMsgAsync(serviceName, methodName, bodyBytes, timeout = 10000) {
         }
         
         const seq = clientSeq;
-        const timer = setTimeout(() => {
+        const timeoutKey = `request_timeout_${seq}`;
+        networkScheduler.setTimeoutTask(timeoutKey, timeout, () => {
             pendingCallbacks.delete(seq);
             // 检查当前待处理的请求数
             const pending = pendingCallbacks.size;
             reject(new Error(`请求超时: ${methodName} (seq=${seq}, pending=${pending})`));
-        }, timeout);
+        });
 
         const sent = sendMsg(serviceName, methodName, bodyBytes, (err, body, meta) => {
-            clearTimeout(timer);
+            networkScheduler.clear(timeoutKey);
             if (err) reject(err);
             else resolve({ body, meta });
         });
         
         if (!sent) {
-            clearTimeout(timer);
+            networkScheduler.clear(timeoutKey);
             reject(new Error(`发送失败: ${methodName}`));
         }
     });
@@ -147,20 +152,12 @@ function handleMessage(data) {
     }
 }
 
-// 调试：记录所有推送类型 (设为 true 可查看所有推送)
-const DEBUG_NOTIFY = false;
-
 function handleNotify(msg) {
     if (!msg.body || msg.body.length === 0) return;
     try {
         const event = types.EventMessage.decode(msg.body);
         const type = event.message_type || '';
         const eventBody = event.body;
-
-        // 调试：显示所有推送类型
-        if (DEBUG_NOTIFY) {
-            console.log(`[DEBUG] 收到推送: ${type}`);
-        }
 
         // 被踢下线
         if (type.includes('Kickout')) {
@@ -172,7 +169,7 @@ function handleNotify(msg) {
                     type,
                     reason: notify.reason_message || '未知',
                 });
-            } catch (e) { }
+            } catch { }
             return;
         }
 
@@ -182,16 +179,13 @@ function handleNotify(msg) {
                 const notify = types.LandsNotify.decode(eventBody);
                 const hostGid = toNum(notify.host_gid);
                 const lands = notify.lands || [];
-                if (DEBUG_NOTIFY) {
-                    console.log(`[DEBUG] LandsNotify: hostGid=${hostGid}, myGid=${userState.gid}, lands=${lands.length}`);
-                }
                 if (lands.length > 0) {
                     // 如果是自己的农场，触发事件
                     if (hostGid === userState.gid || hostGid === 0) {
                         networkEvents.emit('landsChanged', lands);
                     }
                 }
-            } catch (e) { }
+            } catch { }
             return;
         }
 
@@ -214,9 +208,6 @@ function handleNotify(msg) {
                         else if (delta !== 0) userState.exp = Math.max(0, Number(userState.exp || 0) + delta);
                         // 这里调用 updateStatusLevel 会触发 status.js -> worker.js -> stats.js 的更新流程
                         updateStatusLevel(userState.level, userState.exp);
-                        if (DEBUG_NOTIFY && delta !== 0) {
-                            console.log(`[DEBUG] 经验变化: +${delta} (Total: ${userState.exp})`);
-                        }
                     } else if (id === 1 || id === 1001) {
                         // 金币通知有时只有 delta 没有总量，避免把未提供总量误当 0 覆盖
                         if (count > 0) {
@@ -225,9 +216,6 @@ function handleNotify(msg) {
                             userState.gold = Math.max(0, Number(userState.gold || 0) + delta);
                         }
                         updateStatusGold(userState.gold);
-                        if (delta !== 0) {
-                            log('物品', `金币 ${delta > 0 ? '+' : ''}${delta} (当前: ${userState.gold})`);
-                        }
                     } else if (id === 1002) {
                         // 点券
                         if (count > 0) {
@@ -237,7 +225,7 @@ function handleNotify(msg) {
                         }
                     }
                 }
-            } catch (e) { }
+            } catch { }
             return;
         }
 
@@ -267,15 +255,13 @@ function handleNotify(msg) {
                         }
                     }
                     if (shouldUpdateGoldView) {
-                        // 仅在确实收到 gold 字段时刷新金币状态，避免缺省字段覆盖
                         updateStatusGold(userState.gold);
                     }
-                    // 升级提示
                     if (userState.level !== oldLevel) {
-                        log('系统', `升级! Lv${oldLevel} → Lv${userState.level}`);
+                        recordOperation('levelUp', 1);
                     }
                 }
-            } catch (e) { }
+            } catch { }
             return;
         }
 
@@ -287,7 +273,7 @@ function handleNotify(msg) {
                 if (applications.length > 0) {
                     networkEvents.emit('friendApplicationReceived', applications);
                 }
-            } catch (e) { }
+            } catch { }
             return;
         }
 
@@ -300,7 +286,7 @@ function handleNotify(msg) {
                     const names = friends.map(f => f.name || f.remark || `GID:${toNum(f.gid)}`).join(', ');
                     log('好友', `新好友: ${names}`);
                 }
-            } catch (e) { }
+            } catch { }
             return;
         }
 
@@ -310,9 +296,9 @@ function handleNotify(msg) {
                 const notify = types.GoodsUnlockNotify.decode(eventBody);
                 const goods = notify.goods_list || [];
                 if (goods.length > 0) {
-                    log('商店', `解锁 ${goods.length} 个新商品!`);
+                    networkEvents.emit('goodsUnlockNotify', goods);
                 }
-            } catch (e) { }
+            } catch { }
             return;
         }
 
@@ -323,8 +309,8 @@ function handleNotify(msg) {
                 if (notify.task_info) {
                     networkEvents.emit('taskInfoNotify', notify.task_info);
                 }
-            } catch (e) { }
-            return;
+            } catch { }
+            
         }
 
         // 其他未处理的推送类型 (调试用)
@@ -354,13 +340,13 @@ function sendLogin(onLoginSuccess) {
         },
     })).finish();
 
-    sendMsg('gamepb.userpb.UserService', 'Login', body, (err, bodyBytes, meta) => {
+    sendMsg('gamepb.userpb.UserService', 'Login', body, (err, bodyBytes, _meta) => {
         if (err) {
             log('登录', `失败: ${err.message}`);
             // 如果是验证失败，直接退出进程
             if (err.message.includes('code=')) {
                 log('系统', '账号验证失败，即将停止运行...');
-                setTimeout(() => process.exit(0), 1000);
+                networkScheduler.setTimeoutTask('login_error_exit', 1000, () => process.exit(0));
             }
             return;
         }
@@ -384,18 +370,18 @@ function sendLogin(onLoginSuccess) {
 
                 log('系统', `登录成功: ${userState.name} (Lv${userState.level})`);
 
-                console.log('');
-                console.log('========== 登录成功 ==========');
-                console.log(`  GID:    ${userState.gid}`);
-                console.log(`  昵称:   ${userState.name}`);
-                console.log(`  等级:   ${userState.level}`);
-                console.log(`  金币:   ${userState.gold}`);
+                console.warn('');
+                console.warn('========== 登录成功 ==========');
+                console.warn(`  GID:    ${userState.gid}`);
+                console.warn(`  昵称:   ${userState.name}`);
+                console.warn(`  等级:   ${userState.level}`);
+                console.warn(`  金币:   ${userState.gold}`);
                 if (reply.time_now_millis) {
                     syncServerTime(toNum(reply.time_now_millis));
-                    console.log(`  时间:   ${new Date(toNum(reply.time_now_millis)).toLocaleString()}`);
+                    console.warn(`  时间:   ${new Date(toNum(reply.time_now_millis)).toLocaleString()}`);
                 }
-                console.log('===============================');
-                console.log('');
+                console.warn('===============================');
+                console.warn('');
             }
 
             startHeartbeat();
@@ -411,11 +397,11 @@ let lastHeartbeatResponse = Date.now();
 let heartbeatMissCount = 0;
 
 function startHeartbeat() {
-    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    networkScheduler.clear('heartbeat_interval');
     lastHeartbeatResponse = Date.now();
     heartbeatMissCount = 0;
     
-    heartbeatTimer = setInterval(() => {
+    networkScheduler.setIntervalTask('heartbeat_interval', CONFIG.heartbeatInterval, () => {
         if (!userState.gid) return;
         
         // 检查上次心跳响应时间，超过 60 秒没响应说明连接有问题
@@ -426,8 +412,8 @@ function startHeartbeat() {
             if (heartbeatMissCount >= 2) {
                 log('心跳', '尝试重连...');
                 // 清理待处理的回调，避免堆积
-                pendingCallbacks.forEach((cb, seq) => {
-                    try { cb(new Error('连接超时，已清理')); } catch (e) {}
+                pendingCallbacks.forEach((cb, _seq) => {
+                    try { cb(new Error('连接超时，已清理')); } catch {}
                 });
                 pendingCallbacks.clear();
             }
@@ -444,17 +430,19 @@ function startHeartbeat() {
             try {
                 const reply = types.HeartbeatReply.decode(replyBody);
                 if (reply.server_time) syncServerTime(toNum(reply.server_time));
-            } catch (e) { }
+            } catch { }
         });
-    }, CONFIG.heartbeatInterval);
+    });
 }
 
 // ============ WebSocket 连接 ============
 let savedLoginCallback = null;
+let savedCode = null;
 
 function connect(code, onLoginSuccess) {
     savedLoginCallback = onLoginSuccess;
-    const url = `${CONFIG.serverUrl}?platform=${CONFIG.platform}&os=${CONFIG.os}&ver=${CONFIG.clientVersion}&code=${code}&openID=`;
+    if (code) savedCode = code;
+    const url = `${CONFIG.serverUrl}?platform=${CONFIG.platform}&os=${CONFIG.os}&ver=${CONFIG.clientVersion}&code=${savedCode}&openID=`;
 
     ws = new WebSocket(url, {
         headers: {
@@ -473,9 +461,16 @@ function connect(code, onLoginSuccess) {
         handleMessage(Buffer.isBuffer(data) ? data : Buffer.from(data));
     });
 
-    ws.on('close', (code, reason) => {
-        console.log(`[WS] 连接关闭 (code=${code})`);
+    ws.on('close', (code, _reason) => {
+        console.warn(`[WS] 连接关闭 (code=${code})`);
         cleanup();
+        // 自动重连：延迟 5s 后重试，复用已保存的登录回调
+        if (savedLoginCallback) {
+            networkScheduler.setTimeoutTask('auto_reconnect', 5000, () => {
+                log('系统', '[WS] 尝试自动重连...');
+                reconnect(null);
+            });
+        }
     });
 
     ws.on('error', (err) => {
@@ -483,7 +478,7 @@ function connect(code, onLoginSuccess) {
         logWarn('系统', `[WS] 错误: ${message}`);
         const match = message.match(/Unexpected server response:\s*(\d+)/i);
         if (match) {
-            const code = parseInt(match[1], 10) || 0;
+            const code = Number.parseInt(match[1], 10) || 0;
             if (code) {
                 setWsErrorState(code, message);
                 networkEvents.emit('ws_error', { code, message });
@@ -493,7 +488,7 @@ function connect(code, onLoginSuccess) {
 }
 
 function cleanup() {
-    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    networkScheduler.clearAll();
     pendingCallbacks.clear();
 }
 
@@ -505,7 +500,7 @@ function reconnect(newCode) {
         ws = null;
     }
     userState.gid = 0;
-    connect(newCode, savedLoginCallback);
+    connect(newCode || savedCode, savedLoginCallback);
 }
 
 function getWs() { return ws; }

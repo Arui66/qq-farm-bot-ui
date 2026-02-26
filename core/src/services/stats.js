@@ -1,3 +1,4 @@
+const process = require('node:process');
 /**
  * 统计工具 - 重构版
  * 基于状态变化累加收益，而非依赖初始值快照
@@ -18,17 +19,18 @@ const operations = {
     taskClaim: 0,
     sell: 0,
     upgrade: 0,
+    levelUp: 0,
 };
 
 // 状态追踪
-let lastState = {
+const lastState = {
     gold: -1,
     exp: -1,
     coupon: -1,
 };
 
 // 会话初始总量（登录成功时记录）
-let initialState = {
+const initialState = {
     gold: null,
     exp: null,
     coupon: null,
@@ -42,11 +44,6 @@ const session = {
     lastExpGain: 0, // 最近一次经验增量
     lastGoldGain: 0, // 最近一次金币增量
 };
-
-// 导出操作统计供 worker.js 使用
-function getOperations() {
-    return { ...operations };
-}
 
 function recordOperation(type, count = 1) {
     if (operations[type] !== undefined) {
@@ -82,10 +79,10 @@ function updateStats(currentGold, currentExp) {
     if (currentGold > lastState.gold) {
         const delta = currentGold - lastState.gold;
         session.lastGoldGain = delta;
-        // console.log(`[Stats] Gold +${delta}`);
+        // console.warn(`[Stats] Gold +${delta}`);
     } else if (currentGold < lastState.gold) {
         // 消费了金币，不计入收益，但要更新 lastState
-        // console.log(`[Stats] Gold -${lastState.gold - currentGold}`);
+        // console.warn(`[Stats] Gold -${lastState.gold - currentGold}`);
         session.lastGoldGain = 0;
     }
     lastState.gold = currentGold;
@@ -97,11 +94,11 @@ function updateStats(currentGold, currentExp) {
         // 防抖: 如果 1秒内 增加了完全相同的 delta，视为重复包忽略
         const now = Date.now();
         if (delta === session.lastExpGain && (now - (session.lastExpTime || 0) < 1000)) {
-            console.log(`[系统] 忽略重复经验增量 +${delta}`);
+            console.warn(`[系统] 忽略重复经验增量 +${delta}`);
         } else {
             session.lastExpGain = delta;
             session.lastExpTime = now;
-            console.log(`[系统] 经验 +${delta} (总计: ${currentExp})`);
+            console.warn(`[系统] 经验 +${delta} (总计: ${currentExp})`);
         }
     } else {
         session.lastExpGain = 0;
@@ -188,5 +185,4 @@ module.exports = {
     recordGoldExp,    // 兼容旧接口
     resetSessionGains,
     getStats,
-    getOperations,
 };

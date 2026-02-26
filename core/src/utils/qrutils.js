@@ -40,7 +40,7 @@ class HashUtils {
         for (let i = 0; i < pskey.length; i++) {
             gtk += (gtk << 5) + pskey.charCodeAt(i);
         }
-        return gtk & 0x7fffffff;
+        return gtk & 0x7FFFFFFF;
     }
 }
 

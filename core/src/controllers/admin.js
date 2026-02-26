@@ -1,26 +1,56 @@
+const crypto = require('node:crypto');
 /**
  * 管理面板 HTTP 服务
  * 改写为接收 DataProvider 模式
  */
 
-const path = require('path');
-const fs = require('fs');
-const crypto = require('crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+const process = require('node:process');
 const express = require('express');
-const { CONFIG } = require('../config/config');
-const { addOrUpdateAccount, deleteAccount } = require('../models/store');
-const store = require('../models/store'); // 引入 store 模块
-const { QRLoginSession, MiniProgramLoginSession } = require('../services/qrlogin');
-const { CookieUtils } = require('../utils/qrutils');
-const { getResourcePath } = require('../config/runtime-paths');
-const { getLevelExpProgress } = require('../config/gameConfig');
+const { Server: SocketIOServer } = require('socket.io');
 const { version } = require('../../package.json');
+const { CONFIG } = require('../config/config');
+const { getLevelExpProgress } = require('../config/gameConfig');
+const { getResourcePath } = require('../config/runtime-paths');
+const store = require('../models/store');
+const { addOrUpdateAccount, deleteAccount } = store;
+const { findAccountByRef, normalizeAccountRef, resolveAccountId } = require('../services/account-resolver');
+const { createModuleLogger } = require('../services/logger');
+const { MiniProgramLoginSession } = require('../services/qrlogin');
+const { getSchedulerRegistrySnapshot } = require('../services/scheduler');
 
 const hashPassword = (pwd) => crypto.createHash('sha256').update(String(pwd || '')).digest('hex');
+const adminLogger = createModuleLogger('admin');
 
 let app = null;
 let server = null;
 let provider = null; // DataProvider
+let io = null;
+
+function emitRealtimeStatus(accountId, status) {
+    if (!io) return;
+    const id = String(accountId || '').trim();
+    if (!id) return;
+    io.to(`account:${id}`).emit('status:update', { accountId: id, status });
+    io.to('account:all').emit('status:update', { accountId: id, status });
+}
+
+function emitRealtimeLog(entry) {
+    if (!io) return;
+    const payload = (entry && typeof entry === 'object') ? entry : {};
+    const id = String(payload.accountId || '').trim();
+    if (id) io.to(`account:${id}`).emit('log:new', payload);
+    io.to('account:all').emit('log:new', payload);
+}
+
+function emitRealtimeAccountLog(entry) {
+    if (!io) return;
+    const payload = (entry && typeof entry === 'object') ? entry : {};
+    const id = String(payload.accountId || '').trim();
+    if (id) io.to(`account:${id}`).emit('account-log:new', payload);
+    io.to('account:all').emit('account-log:new', payload);
+}
 
 function startAdminServer(dataProvider) {
     if (app) return;
@@ -53,7 +83,7 @@ function startAdminServer(dataProvider) {
     if (fs.existsSync(webDist)) {
         app.use(express.static(webDist));
     } else {
-        console.warn('web build not found at:', webDist);
+        adminLogger.warn('web build not found', { webDist });
         app.get('/', (req, res) => res.send('web build not found. Please build the web project.'));
     }
     app.use('/game-config', express.static(getResourcePath('gameConfig')));
@@ -107,14 +137,81 @@ function startAdminServer(dataProvider) {
         res.json({ ok: true, data: { ok: true, uptime: process.uptime(), version } });
     });
 
+    app.get('/api/auth/validate', (req, res) => {
+        res.json({ ok: true, data: { valid: true } });
+    });
+
+    // API: 调度任务快照（用于调度收敛排查）
+    app.get('/api/scheduler', async (req, res) => {
+        try {
+            const id = getAccId(req);
+            if (provider && typeof provider.getSchedulerStatus === 'function') {
+                const data = await provider.getSchedulerStatus(id);
+                return res.json({ ok: true, data });
+            }
+            return res.json({ ok: true, data: { runtime: getSchedulerRegistrySnapshot(), worker: null, workerError: 'DataProvider does not support scheduler status' } });
+        } catch (e) {
+            return handleApiError(res, e);
+        }
+    });
+
     app.post('/api/logout', (req, res) => {
         const token = req.adminToken;
-        if (token) tokens.delete(token);
+        if (token) {
+            tokens.delete(token);
+            if (io) {
+                for (const socket of io.sockets.sockets.values()) {
+                    if (String(socket.data.adminToken || '') === String(token)) {
+                        socket.disconnect(true);
+                    }
+                }
+            }
+        }
         res.json({ ok: true });
     });
 
+    const getAccountList = () => {
+        try {
+            if (provider && typeof provider.getAccounts === 'function') {
+                const data = provider.getAccounts();
+                if (data && Array.isArray(data.accounts)) return data.accounts;
+            }
+        } catch {
+            // ignore provider failures
+        }
+        const data = store.getAccounts ? store.getAccounts() : { accounts: [] };
+        return Array.isArray(data.accounts) ? data.accounts : [];
+    };
+
+    const isSoftRuntimeError = (err) => {
+        const msg = String((err && err.message) || '');
+        return msg === '账号未运行' || msg === 'API Timeout';
+    };
+
+    function handleApiError(res, err) {
+        if (isSoftRuntimeError(err)) {
+            return res.json({ ok: false, error: err.message });
+        }
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+
+    const resolveAccId = (rawRef) => {
+        const input = normalizeAccountRef(rawRef);
+        if (!input) return '';
+
+        if (provider && typeof provider.resolveAccountId === 'function') {
+            const resolvedByProvider = normalizeAccountRef(provider.resolveAccountId(input));
+            if (resolvedByProvider) return resolvedByProvider;
+        }
+
+        const resolved = resolveAccountId(getAccountList(), input);
+        return resolved || input;
+    };
+
     // Helper to get account ID from header
-    const getAccId = (req) => req.headers['x-account-id'];
+    function getAccId(req) {
+        return resolveAccId(req.headers['x-account-id']);
+    }
 
     // API: 完整状态
     app.get('/api/status', async (req, res) => {
@@ -155,7 +252,7 @@ function startAdminServer(dataProvider) {
             const data = await provider.getLands(id);
             res.json({ ok: true, data });
         } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
+            handleApiError(res, e);
         }
     });
 
@@ -167,7 +264,7 @@ function startAdminServer(dataProvider) {
             const data = await provider.getFriends(id);
             res.json({ ok: true, data });
         } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
+            handleApiError(res, e);
         }
     });
 
@@ -179,7 +276,7 @@ function startAdminServer(dataProvider) {
             const data = await provider.getFriendLands(id, req.params.gid);
             res.json({ ok: true, data });
         } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
+            handleApiError(res, e);
         }
     });
 
@@ -192,8 +289,36 @@ function startAdminServer(dataProvider) {
             const data = await provider.doFriendOp(id, req.params.gid, opType);
             res.json({ ok: true, data });
         } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
+            handleApiError(res, e);
         }
+    });
+
+    // API: 好友黑名单
+    app.get('/api/friend-blacklist', (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: 'Missing x-account-id' });
+        const list = store.getFriendBlacklist ? store.getFriendBlacklist(id) : [];
+        res.json({ ok: true, data: list });
+    });
+
+    app.post('/api/friend-blacklist/toggle', (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: 'Missing x-account-id' });
+        const gid = Number((req.body || {}).gid);
+        if (!gid) return res.status(400).json({ ok: false, error: 'Missing gid' });
+        const current = store.getFriendBlacklist ? store.getFriendBlacklist(id) : [];
+        let next;
+        if (current.includes(gid)) {
+            next = current.filter(g => g !== gid);
+        } else {
+            next = [...current, gid];
+        }
+        const saved = store.setFriendBlacklist ? store.setFriendBlacklist(id, next) : next;
+        // 同步配置到 worker 进程
+        if (provider && typeof provider.broadcastConfig === 'function') {
+            provider.broadcastConfig(id);
+        }
+        res.json({ ok: true, data: saved });
     });
 
     // API: 种子列表
@@ -204,7 +329,7 @@ function startAdminServer(dataProvider) {
             const data = await provider.getSeeds(id);
             res.json({ ok: true, data });
         } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
+            handleApiError(res, e);
         }
     });
 
@@ -216,7 +341,7 @@ function startAdminServer(dataProvider) {
             const data = await provider.getBag(id);
             res.json({ ok: true, data });
         } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
+            handleApiError(res, e);
         }
     });
 
@@ -228,14 +353,17 @@ function startAdminServer(dataProvider) {
             const data = await provider.getDailyGifts(id);
             res.json({ ok: true, data });
         } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
+            handleApiError(res, e);
         }
     });
 
     // API: 启动账号
     app.post('/api/accounts/:id/start', (req, res) => {
         try {
-            provider.startAccount(req.params.id);
+            const ok = provider.startAccount(resolveAccId(req.params.id));
+            if (!ok) {
+                return res.status(404).json({ ok: false, error: 'Account not found' });
+            }
             res.json({ ok: true });
         } catch (e) {
             res.status(500).json({ ok: false, error: e.message });
@@ -245,7 +373,10 @@ function startAdminServer(dataProvider) {
     // API: 停止账号
     app.post('/api/accounts/:id/stop', (req, res) => {
         try {
-            provider.stopAccount(req.params.id);
+            const ok = provider.stopAccount(resolveAccId(req.params.id));
+            if (!ok) {
+                return res.status(404).json({ ok: false, error: 'Account not found' });
+            }
             res.json({ ok: true });
         } catch (e) {
             res.status(500).json({ ok: false, error: e.message });
@@ -261,7 +392,7 @@ function startAdminServer(dataProvider) {
             await provider.doFarmOp(id, opType);
             res.json({ ok: true });
         } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
+            handleApiError(res, e);
         }
     });
 
@@ -340,18 +471,51 @@ function startAdminServer(dataProvider) {
         }
     });
 
-    app.post('/api/accounts', (req, res) => {
+    // API: 更新账号备注（兼容旧接口）
+    app.post('/api/account/remark', (req, res) => {
         try {
-            const isUpdate = !!req.body.id;
-            let wasRunning = false;
-            if (isUpdate && provider.isAccountRunning) {
-                wasRunning = provider.isAccountRunning(req.body.id);
+            const body = (req.body && typeof req.body === 'object') ? req.body : {};
+            const rawRef = body.id || body.accountId || body.uin || req.headers['x-account-id'];
+            const accountList = getAccountList();
+            const target = findAccountByRef(accountList, rawRef);
+            if (!target || !target.id) {
+                return res.status(404).json({ ok: false, error: 'Account not found' });
             }
 
-            const data = addOrUpdateAccount(req.body);
+            const remark = String(body.remark !== undefined ? body.remark : body.name || '').trim();
+            if (!remark) {
+                return res.status(400).json({ ok: false, error: 'Missing remark' });
+            }
+
+            const accountId = String(target.id);
+            const data = addOrUpdateAccount({ id: accountId, name: remark });
+            if (provider && typeof provider.setRuntimeAccountName === 'function') {
+                provider.setRuntimeAccountName(accountId, remark);
+            }
+            if (provider && provider.addAccountLog) {
+                provider.addAccountLog('update', `更新账号备注: ${remark}`, accountId, remark);
+            }
+            res.json({ ok: true, data });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    app.post('/api/accounts', (req, res) => {
+        try {
+            const body = (req.body && typeof req.body === 'object') ? req.body : {};
+            const isUpdate = !!body.id;
+            const resolvedUpdateId = isUpdate ? resolveAccId(body.id) : '';
+            const payload = isUpdate ? { ...body, id: resolvedUpdateId || String(body.id) } : body;
+            let wasRunning = false;
+            if (isUpdate && provider.isAccountRunning) {
+                wasRunning = provider.isAccountRunning(payload.id);
+            }
+
+            const data = addOrUpdateAccount(payload);
             if (provider.addAccountLog) {
-                const accountId = isUpdate ? String(req.body.id) : String((data.accounts[data.accounts.length - 1] || {}).id || '');
-                const accountName = req.body.name || '';
+                const accountId = isUpdate ? String(payload.id) : String((data.accounts[data.accounts.length - 1] || {}).id || '');
+                const accountName = payload.name || '';
                 provider.addAccountLog(
                     isUpdate ? 'update' : 'add',
                     isUpdate ? `更新账号: ${accountName || accountId}` : `添加账号: ${accountName || accountId}`,
@@ -365,7 +529,7 @@ function startAdminServer(dataProvider) {
                 if (newAcc) provider.startAccount(newAcc.id);
             } else if (wasRunning) {
                 // 如果是更新，且之前在运行，则重启
-                provider.restartAccount(req.body.id);
+                provider.restartAccount(payload.id);
             }
             res.json({ ok: true, data });
         } catch (e) {
@@ -375,12 +539,13 @@ function startAdminServer(dataProvider) {
 
     app.delete('/api/accounts/:id', (req, res) => {
         try {
+            const resolvedId = resolveAccId(req.params.id) || String(req.params.id || '');
             const before = provider.getAccounts();
-            const target = (before.accounts || []).find(a => String(a.id) === String(req.params.id));
-            provider.stopAccount(req.params.id);
-            const data = deleteAccount(req.params.id);
+            const target = findAccountByRef(before.accounts || [], req.params.id);
+            provider.stopAccount(resolvedId);
+            const data = deleteAccount(resolvedId);
             if (provider.addAccountLog) {
-                provider.addAccountLog('delete', `删除账号: ${(target && target.name) || req.params.id}`, req.params.id, target ? target.name : '');
+                provider.addAccountLog('delete', `删除账号: ${(target && target.name) || req.params.id}`, resolvedId, target ? target.name : '');
             }
             res.json({ ok: true, data });
         } catch (e) {
@@ -391,9 +556,10 @@ function startAdminServer(dataProvider) {
     // API: 账号日志
     app.get('/api/account-logs', (req, res) => {
         try {
-            const limit = parseInt(req.query.limit) || 100;
+            const limit = Number.parseInt(req.query.limit) || 100;
             const list = provider.getAccountLogs ? provider.getAccountLogs(limit) : [];
-            res.json({ ok: true, data: list });
+            // 与当前 web 前端保持一致：直接返回数组
+            res.json(Array.isArray(list) ? list : []);
         } catch (e) {
             res.status(500).json({ ok: false, error: e.message });
         }
@@ -402,9 +568,9 @@ function startAdminServer(dataProvider) {
     // API: 日志
     app.get('/api/logs', (req, res) => {
         const queryAccountIdRaw = (req.query.accountId || '').toString().trim();
-        const id = queryAccountIdRaw ? (queryAccountIdRaw === 'all' ? '' : queryAccountIdRaw) : getAccId(req);
+        const id = queryAccountIdRaw ? (queryAccountIdRaw === 'all' ? '' : resolveAccId(queryAccountIdRaw)) : getAccId(req);
         const options = {
-            limit: parseInt(req.query.limit) || 100,
+            limit: Number.parseInt(req.query.limit) || 100,
             tag: req.query.tag || '',
             module: req.query.module || '',
             event: req.query.event || '',
@@ -474,21 +640,91 @@ function startAdminServer(dataProvider) {
         }
     });
 
+    const applySocketSubscription = (socket, accountRef = '') => {
+        const incoming = String(accountRef || '').trim();
+        const resolved = incoming && incoming !== 'all' ? resolveAccId(incoming) : '';
+        for (const room of socket.rooms) {
+            if (room.startsWith('account:')) socket.leave(room);
+        }
+        if (resolved) {
+            socket.join(`account:${resolved}`);
+            socket.data.accountId = resolved;
+        } else {
+            socket.join('account:all');
+            socket.data.accountId = '';
+        }
+        socket.emit('subscribed', { accountId: socket.data.accountId || 'all' });
+
+        try {
+            const targetId = socket.data.accountId || '';
+            if (targetId && provider && typeof provider.getStatus === 'function') {
+                const currentStatus = provider.getStatus(targetId);
+                socket.emit('status:update', { accountId: targetId, status: currentStatus });
+            }
+            if (provider && typeof provider.getLogs === 'function') {
+                const currentLogs = provider.getLogs(targetId, { limit: 100 });
+                socket.emit('logs:snapshot', {
+                    accountId: targetId || 'all',
+                    logs: Array.isArray(currentLogs) ? currentLogs : [],
+                });
+            }
+            if (provider && typeof provider.getAccountLogs === 'function') {
+                const currentAccountLogs = provider.getAccountLogs(100);
+                socket.emit('account-logs:snapshot', {
+                    logs: Array.isArray(currentAccountLogs) ? currentAccountLogs : [],
+                });
+            }
+        } catch {
+            // ignore snapshot push errors
+        }
+    };
+
     const port = CONFIG.adminPort || 3000;
     server = app.listen(port, '0.0.0.0', () => {
-        console.log(`[管理面板] http://localhost:${port}`);
+        adminLogger.info('admin panel started', { url: `http://localhost:${port}`, port });
     });
-}
 
-function stopAdminServer() {
-    if (server) {
-        server.close();
-        server = null;
-        app = null;
-    }
+    io = new SocketIOServer(server, {
+        path: '/socket.io',
+        cors: {
+            origin: '*',
+            methods: ['GET', 'POST'],
+            allowedHeaders: ['x-admin-token', 'x-account-id'],
+        },
+    });
+
+    io.use((socket, next) => {
+        const authToken = socket.handshake.auth && socket.handshake.auth.token
+            ? String(socket.handshake.auth.token)
+            : '';
+        const headerToken = socket.handshake.headers && socket.handshake.headers['x-admin-token']
+            ? String(socket.handshake.headers['x-admin-token'])
+            : '';
+        const token = authToken || headerToken;
+        if (!token || !tokens.has(token)) {
+            return next(new Error('Unauthorized'));
+        }
+        socket.data.adminToken = token;
+        return next();
+    });
+
+    io.on('connection', (socket) => {
+        const initialAccountRef = (socket.handshake.auth && socket.handshake.auth.accountId)
+            || (socket.handshake.query && socket.handshake.query.accountId)
+            || '';
+        applySocketSubscription(socket, initialAccountRef);
+        socket.emit('ready', { ok: true, ts: Date.now() });
+
+        socket.on('subscribe', (payload) => {
+            const body = (payload && typeof payload === 'object') ? payload : {};
+            applySocketSubscription(socket, body.accountId || '');
+        });
+    });
 }
 
 module.exports = {
     startAdminServer,
-    stopAdminServer,
+    emitRealtimeStatus,
+    emitRealtimeLog,
+    emitRealtimeAccountLog,
 };

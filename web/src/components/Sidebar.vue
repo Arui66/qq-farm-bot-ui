@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useDateFormat, useIntervalFn, useNow } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '@/api'
 import AccountModal from '@/components/AccountModal.vue'
@@ -18,7 +18,7 @@ const statusStore = useStatusStore()
 const appStore = useAppStore()
 const route = useRoute()
 const { accounts, currentAccount } = storeToRefs(accountStore)
-const { status } = storeToRefs(statusStore)
+const { status, realtimeConnected } = storeToRefs(statusStore)
 const { sidebarOpen } = storeToRefs(appStore)
 
 const showAccountDropdown = ref(false)
@@ -47,37 +47,29 @@ async function checkConnection() {
         serverVersion.value = res.data.data.version
       }
     }
+    const accountRef = currentAccount.value?.id || currentAccount.value?.uin
+    if (accountRef) {
+      statusStore.connectRealtime(String(accountRef))
+    }
   }
   catch {
     systemConnected.value = false
   }
 }
 
-async function refreshStatus() {
-  if (currentAccount.value?.uin) {
-    await statusStore.fetchStatus(String(currentAccount.value.uin))
+async function refreshStatusFallback() {
+  if (realtimeConnected.value)
+    return
 
-    // Check for WS Error (400 = Code Expired)
-    const wsError = status.value?.wsError
-    if (wsError && Number(wsError.code) === 400 && currentAccount.value) {
-      const errAt = Number(wsError.at) || 0
-      const accId = String(currentAccount.value.uin)
-      const lastNotified = wsErrorNotifiedAt.value[accId] || 0
-
-      if (errAt > lastNotified) {
-        wsErrorNotifiedAt.value[accId] = errAt
-        // Trigger re-login (AccountModal in edit mode)
-        accountToEdit.value = currentAccount.value
-        showAccountModal.value = true
-        // Switch to QR tab by default for re-login? AccountModal defaults to QR.
-      }
-    }
+  const accountRef = currentAccount.value?.id || currentAccount.value?.uin
+  if (accountRef) {
+    await statusStore.fetchStatus(String(accountRef))
   }
 }
 
 async function handleAccountSaved() {
   await accountStore.fetchAccounts()
-  await refreshStatus()
+  await refreshStatusFallback()
   showAccountModal.value = false
   showRemarkModal.value = false
 }
@@ -93,15 +85,36 @@ onMounted(() => {
   checkConnection()
 })
 
+onBeforeUnmount(() => {
+  statusStore.disconnectRealtime()
+})
+
 useIntervalFn(checkConnection, 30000)
 useIntervalFn(() => {
-  refreshStatus()
+  refreshStatusFallback()
   accountStore.fetchAccounts()
 }, 10000)
 
-watch(currentAccount, () => {
-  refreshStatus()
-})
+watch(() => currentAccount.value?.id || currentAccount.value?.uin || '', () => {
+  const accountRef = currentAccount.value?.id || currentAccount.value?.uin
+  statusStore.connectRealtime(String(accountRef || ''))
+  refreshStatusFallback()
+}, { immediate: true })
+
+watch(() => status.value?.wsError, (wsError: any) => {
+  if (!wsError || Number(wsError.code) !== 400 || !currentAccount.value)
+    return
+
+  const errAt = Number(wsError.at) || 0
+  const accId = String(currentAccount.value.id || currentAccount.value.uin || '')
+  const lastNotified = wsErrorNotifiedAt.value[accId] || 0
+  if (errAt <= lastNotified)
+    return
+
+  wsErrorNotifiedAt.value[accId] = errAt
+  accountToEdit.value = currentAccount.value
+  showAccountModal.value = true
+}, { deep: true })
 
 const uptime = computed(() => {
   const diff = Math.floor(serverUptimeBase.value + (now.value.getTime() - lastPingTime.value) / 1000)
@@ -117,8 +130,9 @@ const displayName = computed(() => {
     return '选择账号'
 
   // 1. 优先显示实时状态中的昵称 (如果有且不是未登录)
-  if (status.value?.name && status.value.name !== '未登录') {
-    return status.value.name
+  const liveName = status.value?.status?.name
+  if (liveName && liveName !== '未登录') {
+    return liveName
   }
 
   // 2. 其次显示账号存储的备注名称 (name)
@@ -142,7 +156,7 @@ const connectionStatus = computed(() => {
     }
   }
 
-  if (!currentAccount.value?.uin) {
+  if (!currentAccount.value?.id) {
     return {
       text: '请添加账号',
       color: 'bg-gray-400',
@@ -233,7 +247,7 @@ watch(
                 {{ displayName }}
               </span>
               <span class="w-full truncate text-left text-xs text-gray-400">
-                {{ currentAccount?.uin || '未选择' }}
+                {{ currentAccount?.uin || currentAccount?.id || '未选择' }}
               </span>
             </div>
           </div>
@@ -252,23 +266,25 @@ watch(
             <template v-if="accounts.length > 0">
               <button
                 v-for="acc in accounts"
-                :key="acc.uin"
+                :key="acc.id || acc.uin"
                 class="w-full flex items-center gap-3 px-4 py-2 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/50"
-                :class="{ 'bg-green-50 dark:bg-green-900/10': currentAccount?.uin === acc.uin }"
+                :class="{ 'bg-green-50 dark:bg-green-900/10': currentAccount?.id === acc.id }"
                 @click="selectAccount(acc)"
               >
                 <div class="h-6 w-6 flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-gray-200 dark:bg-gray-600">
                   <img
+                    v-if="acc.uin"
                     :src="`https://q1.qlogo.cn/g?b=qq&nk=${acc.uin}&s=100`"
                     class="h-full w-full object-cover"
                     @error="(e) => (e.target as HTMLImageElement).style.display = 'none'"
                   >
+                  <div v-else class="i-carbon-user text-gray-400" />
                 </div>
                 <div class="min-w-0 flex flex-1 flex-col items-start">
                   <span class="w-full truncate text-left text-sm font-medium">
                     {{ acc.name || acc.nick || acc.uin }}
                   </span>
-                  <span class="text-xs text-gray-400">{{ acc.uin }}</span>
+                  <span class="text-xs text-gray-400">{{ acc.uin || acc.id }}</span>
                 </div>
                 <div class="flex items-center gap-1">
                   <button
@@ -278,7 +294,7 @@ watch(
                   >
                     <div class="i-carbon-edit" />
                   </button>
-                  <div v-if="currentAccount?.uin === acc.uin" class="i-carbon-checkmark text-green-500" />
+                  <div v-if="currentAccount?.id === acc.id" class="i-carbon-checkmark text-green-500" />
                 </div>
               </button>
             </template>

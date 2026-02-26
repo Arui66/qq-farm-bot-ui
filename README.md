@@ -53,24 +53,23 @@ pnpm -v
 2. 进入项目目录并安装依赖
 
 ```powershell
-cd D:\Projects\qq-farm-bot-ui
+cd D:\Projects\qq-farm-bot-refactor
 pnpm install
-# 安装前端依赖并构建
-pnpm web:install
-pnpm web:build
+# 构建前端静态资源
+pnpm build:web
 ```
 
 3. 启动项目
 
 ```powershell
-pnpm start
+pnpm dev:core
 ```
 
 4. （可选）设置管理密码后启动
 
 ```powershell
 $env:ADMIN_PASSWORD="你的强密码"
-pnpm start
+pnpm dev:core
 ```
 
 ### Linux（Ubuntu/Debian 示例）
@@ -90,23 +89,22 @@ pnpm -v
 2. 进入项目目录并安装依赖
 
 ```bash
-cd /path/to/qq-farm-bot-ui
+cd /path/to/qq-farm-bot-refactor
 pnpm install
-# 安装前端依赖并构建
-pnpm web:install
-pnpm web:build
+# 构建前端静态资源
+pnpm build:web
 ```
 
 3. 启动项目
 
 ```bash
-pnpm start
+pnpm dev:core
 ```
 
 4. 设置管理密码后启动
 
 ```bash
-ADMIN_PASSWORD='你的强密码' pnpm start
+ADMIN_PASSWORD='你的强密码' pnpm dev:core
 ```
 
 默认面板端口为 `3000`：
@@ -125,7 +123,7 @@ ADMIN_PASSWORD='你的强密码' pnpm start
 1. 进入项目目录
 
 ```bash
-cd /path/to/qq-farm-bot-ui
+cd /path/to/qq-farm-bot-refactor
 ```
 
 2. 构建并启动
@@ -182,22 +180,22 @@ pnpm install
 ```
 
 ```bash
-pnpm run build:release
+pnpm package:release
 ```
 
 构建产物输出在 `dist/` 目录。
 
 ### 产物说明
-- Windows: `dist/farm-win-x64.exe`
-- Linux: `dist/farm-linux-x64`
-- macOS Intel: `dist/farm-macos-x64`
-- macOS Apple Silicon: `dist/farm-macos-arm64`
+- Windows: `dist/qq-farm-bot-win-x64.exe`
+- Linux: `dist/qq-farm-bot-linux-x64`
+- macOS Intel: `dist/qq-farm-bot-macos-x64`
+- macOS Apple Silicon: `dist/qq-farm-bot-macos-arm64`
 
 ### 用户运行方式（无需 Node.js）
 
-- Windows: 双击 exe 或在终端运行 `.\farm-win-x64.exe`
-- Linux: `chmod +x ./farm-linux-x64 && ./farm-linux-x64`
-- macOS: `chmod +x ./farm-macos-arm64 && ./farm-macos-arm64`（或 x64 版本）
+- Windows: 双击 exe 或在终端运行 `.\qq-farm-bot-win-x64.exe`
+- Linux: `chmod +x ./qq-farm-bot-linux-x64 && ./qq-farm-bot-linux-x64`
+- macOS: `chmod +x ./qq-farm-bot-macos-arm64 && ./qq-farm-bot-macos-arm64`（或 x64 版本）
 
 程序会在可执行文件同级目录自动创建 `data/` 并写入配置与账号数据：
 - `data/store.json`

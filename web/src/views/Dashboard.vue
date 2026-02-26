@@ -12,15 +12,21 @@ import { useStatusStore } from '@/stores/status'
 const statusStore = useStatusStore()
 const accountStore = useAccountStore()
 const bagStore = useBagStore()
-const { status, logs: statusLogs } = storeToRefs(statusStore)
-const { currentAccountId, logs: accountLogs } = storeToRefs(accountStore)
+const {
+  status,
+  logs: statusLogs,
+  accountLogs: statusAccountLogs,
+  realtimeConnected,
+} = storeToRefs(statusStore)
+const { currentAccountId, currentAccount } = storeToRefs(accountStore)
 const { dashboardItems } = storeToRefs(bagStore)
 const logContainer = ref<HTMLElement | null>(null)
 const autoScroll = ref(true)
+const lastBagFetchAt = ref(0)
 
 const allLogs = computed(() => {
   const sLogs = statusLogs.value || []
-  const aLogs = (accountLogs.value || []).map((l: any) => ({
+  const aLogs = (statusAccountLogs.value || []).map((l: any) => ({
     ts: new Date(l.time).getTime(),
     time: l.time,
     tag: l.action === 'Error' ? '错误' : '系统',
@@ -28,7 +34,7 @@ const allLogs = computed(() => {
     isAccountLog: true,
   }))
 
-  return [...sLogs, ...aLogs].sort((a, b) => a.ts - b.ts)
+  return [...sLogs, ...aLogs].sort((a: any, b: any) => a.ts - b.ts).filter((l: any) => !l.isAccountLog)
 })
 
 const filter = reactive({
@@ -37,6 +43,10 @@ const filter = reactive({
   keyword: '',
   isWarn: '',
 })
+
+const hasActiveLogFilter = computed(() =>
+  !!(filter.module || filter.event || filter.keyword || filter.isWarn),
+)
 
 const modules = [
   { label: '所有模块', value: '' },
@@ -65,6 +75,7 @@ const events = [
   { label: '分享奖励', value: 'daily_share' },
   { label: '会员礼包', value: 'vip_daily_gift' },
   { label: '月卡礼包', value: 'month_card_gift' },
+  { label: '开服红包', value: 'open_server_gift' },
   { label: '图鉴奖励', value: 'illustrated_rewards' },
   { label: '邮箱领取', value: 'email_rewards' },
   { label: '出售成功', value: 'sell_success' },
@@ -73,6 +84,14 @@ const events = [
   { label: '好友巡查', value: 'friend_cycle' },
   { label: '访问好友', value: 'visit_friend' },
 ]
+
+const eventLabelMap: Record<string, string> = Object.fromEntries(
+  events.filter(e => e.value).map(e => [e.value, e.label]),
+)
+
+function getEventLabel(event: string) {
+  return eventLabelMap[event] || event
+}
 
 const logs = [
   { label: '所有等级', value: '' },
@@ -163,7 +182,7 @@ function updateCountdowns() {
     nextFarmCheck.value = formatDuration(localNextFarmRemainSec)
   }
   else {
-    nextFarmCheck.value = '--'
+    nextFarmCheck.value = '巡查中...'
   }
 
   if (localNextFriendRemainSec > 0) {
@@ -171,7 +190,7 @@ function updateCountdowns() {
     nextFriendCheck.value = formatDuration(localNextFriendRemainSec)
   }
   else {
-    nextFriendCheck.value = '--'
+    nextFriendCheck.value = '巡查中...'
   }
 }
 
@@ -228,42 +247,33 @@ function formatLogTime(timeStr: string) {
   return parts.length > 1 ? parts[1] : timeStr
 }
 
-function getOpIcon(key: string | number) {
-  const map: Record<string, string> = {
-    harvest: 'i-carbon-corn',
-    water: 'i-carbon-rain-drop',
-    weed: 'i-carbon-agriculture-analytics', // using agriculture analytics for weed/grass
-    bug: 'i-carbon-pest',
-    fertilize: 'i-carbon-chemistry',
-    plant: 'i-carbon-sprout',
-    upgrade: 'i-carbon-upgrade',
-    steal: 'i-carbon-collaborate', // using collaborate for steal as interaction
-    helpWater: 'i-carbon-rain-drop',
-    helpWeed: 'i-carbon-agriculture-analytics',
-    helpBug: 'i-carbon-pest',
-    taskClaim: 'i-carbon-task',
-    sell: 'i-carbon-currency',
-  }
-  return map[String(key)] || 'i-carbon-circle-dash'
+const OP_META: Record<string, { label: string, icon: string, color: string }> = {
+  harvest: { label: '收获', icon: 'i-carbon-crop-growth', color: 'text-green-500' },
+  water: { label: '浇水', icon: 'i-carbon-rain-drop', color: 'text-blue-400' },
+  weed: { label: '除草', icon: 'i-carbon-cut-out', color: 'text-yellow-500' },
+  bug: { label: '除虫', icon: 'i-carbon-warning-alt', color: 'text-red-400' },
+  fertilize: { label: '施肥', icon: 'i-carbon-chemistry', color: 'text-emerald-500' },
+  plant: { label: '种植', icon: 'i-carbon-tree', color: 'text-lime-500' },
+  upgrade: { label: '土地升级', icon: 'i-carbon-upgrade', color: 'text-purple-500' },
+  levelUp: { label: '账号升级', icon: 'i-carbon-user-certification', color: 'text-indigo-500' },
+  steal: { label: '偷菜', icon: 'i-carbon-run', color: 'text-orange-500' },
+  helpWater: { label: '帮浇水', icon: 'i-carbon-rain-drop', color: 'text-blue-300' },
+  helpWeed: { label: '帮除草', icon: 'i-carbon-cut-out', color: 'text-yellow-400' },
+  helpBug: { label: '帮除虫', icon: 'i-carbon-warning-alt', color: 'text-red-300' },
+  taskClaim: { label: '任务', icon: 'i-carbon-task-complete', color: 'text-indigo-500' },
+  sell: { label: '出售', icon: 'i-carbon-shopping-cart', color: 'text-pink-500' },
 }
 
 function getOpName(key: string | number) {
-  const map: Record<string, string> = {
-    harvest: '收获',
-    water: '浇水',
-    weed: '除草',
-    bug: '除虫',
-    fertilize: '施肥',
-    plant: '种植',
-    upgrade: '升级',
-    steal: '偷菜',
-    helpWater: '帮浇水',
-    helpWeed: '帮除草',
-    helpBug: '帮除虫',
-    taskClaim: '任务',
-    sell: '出售',
-  }
-  return map[String(key)] || String(key)
+  return OP_META[String(key)]?.label || String(key)
+}
+
+function getOpIcon(key: string | number) {
+  return OP_META[String(key)]?.icon || 'i-carbon-circle-dash'
+}
+
+function getOpColor(key: string | number) {
+  return OP_META[String(key)]?.color || 'text-gray-400'
 }
 
 function getExpPercent(p: any) {
@@ -272,21 +282,64 @@ function getExpPercent(p: any) {
   return Math.min(100, Math.max(0, (p.current / p.needed) * 100))
 }
 
-function refresh() {
+async function refreshBag(force = false) {
+  if (!currentAccountId.value)
+    return
+  if (!currentAccount.value?.running)
+    return
+  if (!status.value?.connection?.connected)
+    return
+
+  const now = Date.now()
+  if (!force && now - lastBagFetchAt.value < 2500)
+    return
+  lastBagFetchAt.value = now
+  await bagStore.fetchBag(currentAccountId.value)
+}
+
+async function refresh() {
   if (currentAccountId.value) {
-    statusStore.fetchStatus(currentAccountId.value)
-    statusStore.fetchLogs(currentAccountId.value, {
-      module: filter.module || undefined,
-      event: filter.event || undefined,
-      keyword: filter.keyword || undefined,
-      isWarn: filter.isWarn === 'warn' ? true : filter.isWarn === 'info' ? false : undefined,
-    })
-    accountStore.fetchLogs()
-    bagStore.fetchBag(currentAccountId.value)
+    const acc = currentAccount.value
+    if (!acc)
+      return
+
+    // 首次加载、断线兜底时走 HTTP；连接正常时优先走 WS 实时推送
+    if (!realtimeConnected.value) {
+      await statusStore.fetchStatus(currentAccountId.value)
+      await statusStore.fetchAccountLogs()
+    }
+
+    if (hasActiveLogFilter.value || !realtimeConnected.value) {
+      await statusStore.fetchLogs(currentAccountId.value, {
+        module: filter.module || undefined,
+        event: filter.event || undefined,
+        keyword: filter.keyword || undefined,
+        isWarn: filter.isWarn === 'warn' ? true : filter.isWarn === 'info' ? false : undefined,
+      })
+    }
+
+    // 仅在账号已运行且连接就绪后拉背包，避免启动阶段触发500
+    await refreshBag()
   }
 }
 
 watch(currentAccountId, () => {
+  refresh()
+})
+
+watch(() => status.value?.connection?.connected, (connected) => {
+  if (connected)
+    refreshBag(true)
+})
+
+watch(() => JSON.stringify(status.value?.operations || {}), (next, prev) => {
+  if (!realtimeConnected.value || next === prev)
+    return
+  refreshBag()
+})
+
+watch(hasActiveLogFilter, (enabled) => {
+  statusStore.setRealtimeLogsEnabled(!enabled)
   refresh()
 })
 
@@ -308,19 +361,20 @@ watch(allLogs, () => {
 }, { deep: true })
 
 onMounted(() => {
+  statusStore.setRealtimeLogsEnabled(!hasActiveLogFilter.value)
   refresh()
 })
 
-// Auto refresh every 5s
-useIntervalFn(refresh, 5000)
+// Auto refresh fallback every 10s (WS 断开或筛选条件启用时会回退 HTTP)
+useIntervalFn(refresh, 10000)
 // Countdown timer (every 1s)
 useIntervalFn(updateCountdowns, 1000)
 </script>
 
 <template>
-  <div class="pt-6 space-y-6">
+  <div class="flex flex-col gap-6 pt-6 md:h-full">
     <!-- Status Cards -->
-    <div class="grid grid-cols-1 gap-4 lg:grid-cols-3 md:grid-cols-2">
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-3 sm:grid-cols-2">
       <!-- Account & Exp -->
       <div class="flex flex-col rounded-lg bg-white p-4 shadow dark:bg-gray-800">
         <div class="mb-2 flex items-start justify-between">
@@ -369,8 +423,12 @@ useIntervalFn(updateCountdowns, 1000)
             <div class="text-2xl text-yellow-600 font-bold dark:text-yellow-500">
               {{ status?.status?.gold || 0 }}
             </div>
-            <div v-if="status?.sessionGoldGained > 0" class="text-[10px] text-green-500">
-              +{{ status?.sessionGoldGained }}
+            <div
+              v-if="(status?.sessionGoldGained || 0) !== 0"
+              class="text-[10px]"
+              :class="(status?.sessionGoldGained || 0) > 0 ? 'text-green-500' : 'text-red-500'"
+            >
+              {{ (status?.sessionGoldGained || 0) > 0 ? '+' : '' }}{{ status?.sessionGoldGained || 0 }}
             </div>
           </div>
           <div class="text-right">
@@ -381,8 +439,12 @@ useIntervalFn(updateCountdowns, 1000)
             <div class="text-2xl text-emerald-500 font-bold dark:text-emerald-400">
               {{ status?.status?.coupon || 0 }}
             </div>
-            <div v-if="status?.sessionCouponGained > 0" class="text-[10px] text-green-500">
-              +{{ status?.sessionCouponGained }}
+            <div
+              v-if="(status?.sessionCouponGained || 0) !== 0"
+              class="text-[10px]"
+              :class="(status?.sessionCouponGained || 0) > 0 ? 'text-green-500' : 'text-red-500'"
+            >
+              {{ (status?.sessionCouponGained || 0) > 0 ? '+' : '' }}{{ status?.sessionCouponGained || 0 }}
             </div>
           </div>
         </div>
@@ -455,11 +517,11 @@ useIntervalFn(updateCountdowns, 1000)
     </div>
 
     <!-- Main Content Flex -->
-    <div class="flex flex-col items-stretch gap-6 lg:flex-row">
+    <div class="flex flex-1 flex-col items-stretch gap-6 md:flex-row md:overflow-hidden">
       <!-- Logs (Left Column) -->
-      <div class="flex flex-col gap-6 lg:w-3/4">
+      <div class="flex flex-1 flex-col gap-6 md:w-3/4 md:overflow-hidden">
         <!-- Logs -->
-        <div class="flex flex-col rounded-lg bg-white p-6 shadow dark:bg-gray-800">
+        <div class="flex flex-1 flex-col rounded-lg bg-white p-6 shadow md:overflow-hidden dark:bg-gray-800">
           <div class="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <h3 class="flex items-center gap-2 text-lg font-medium">
               <div class="i-carbon-document" />
@@ -507,13 +569,14 @@ useIntervalFn(updateCountdowns, 1000)
             </div>
           </div>
 
-          <div ref="logContainer" class="h-[500px] overflow-y-auto rounded bg-gray-50 p-4 text-sm leading-relaxed font-mono dark:bg-gray-900" @scroll="onLogScroll">
+          <div ref="logContainer" class="max-h-[50vh] min-h-0 flex-1 overflow-y-auto rounded bg-gray-50 p-4 text-sm leading-relaxed font-mono md:max-h-none dark:bg-gray-900" @scroll="onLogScroll">
             <div v-if="!allLogs.length" class="py-8 text-center text-gray-400">
               暂无日志
             </div>
             <div v-for="log in allLogs" :key="log.ts + log.msg" class="mb-1 break-all">
               <span class="mr-2 select-none text-gray-400">[{{ formatLogTime(log.time) }}]</span>
               <span class="mr-2 rounded px-1.5 py-0.5 text-xs font-bold" :class="getLogTagClass(log.tag)">{{ log.tag }}</span>
+              <span v-if="log.meta?.event" class="mr-2 rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-500 dark:bg-blue-900/20 dark:text-blue-400">{{ getEventLabel(log.meta.event) }}</span>
               <span :class="getLogMsgClass(log.tag)">{{ log.msg }}</span>
             </div>
           </div>
@@ -521,7 +584,7 @@ useIntervalFn(updateCountdowns, 1000)
       </div>
 
       <!-- Right Column Stack -->
-      <div class="flex flex-col gap-6 lg:w-1/4">
+      <div class="flex flex-col gap-6 md:w-1/4">
         <!-- Next Checks -->
         <div class="flex flex-col rounded-lg bg-white p-6 shadow dark:bg-gray-800">
           <h3 class="mb-4 flex items-center gap-2 text-lg font-medium">
@@ -540,7 +603,7 @@ useIntervalFn(updateCountdowns, 1000)
             </div>
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-2 text-gray-700 dark:text-gray-300">
-                <div class="i-carbon-collaborate text-lg text-blue-500" />
+                <div class="i-carbon-user-multiple text-lg text-blue-500" />
                 <span>好友</span>
               </div>
               <div class="text-lg font-bold font-mono">
@@ -556,15 +619,19 @@ useIntervalFn(updateCountdowns, 1000)
             <div class="i-carbon-chart-column" />
             <span>今日统计</span>
           </h3>
-          <div class="grid grid-cols-2 gap-2">
-            <div v-for="(val, key) in (status?.operations || {})" :key="key" class="flex items-center justify-between rounded bg-gray-50 px-3 py-2 dark:bg-gray-700/30">
+          <div class="grid grid-cols-2 gap-2 2xl:gap-3">
+            <div
+              v-for="(val, key) in (status?.operations || {})"
+              :key="key"
+              class="flex items-center justify-between rounded-lg bg-gray-50 px-3 py-2 dark:bg-gray-700/30 2xl:px-4 2xl:py-3"
+            >
               <div class="flex items-center gap-2">
-                <div :class="getOpIcon(key)" class="text-lg text-blue-500" />
-                <div class="text-xs text-gray-500">
+                <div class="text-base 2xl:text-lg" :class="[getOpIcon(key), getOpColor(key)]" />
+                <div class="text-xs text-gray-500 2xl:text-sm">
                   {{ getOpName(key) }}
                 </div>
               </div>
-              <div class="text-sm font-bold">
+              <div class="text-sm font-bold 2xl:text-base">
                 {{ val }}
               </div>
             </div>

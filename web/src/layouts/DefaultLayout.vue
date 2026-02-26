@@ -8,7 +8,7 @@ const { sidebarOpen } = storeToRefs(appStore)
 </script>
 
 <template>
-  <div class="h-screen w-screen flex overflow-hidden bg-gray-50 dark:bg-gray-900">
+  <div class="w-screen flex overflow-hidden bg-gray-50 dark:bg-gray-900" style="height: 100dvh;">
     <!-- Mobile Sidebar Overlay -->
     <div
       v-if="sidebarOpen"
@@ -33,8 +33,8 @@ const { sidebarOpen } = storeToRefs(appStore)
       </header>
 
       <!-- Main Content Area -->
-      <div class="custom-scrollbar flex-1 overflow-y-auto p-4 md:p-6">
-        <div class="mx-auto max-w-7xl">
+      <div class="flex flex-1 flex-col overflow-hidden">
+        <div class="custom-scrollbar flex flex-1 flex-col overflow-y-auto p-2 md:p-6 sm:p-4">
           <RouterView v-slot="{ Component, route }">
             <Transition name="slide-fade" mode="out-in">
               <component :is="Component" :key="route.path" />

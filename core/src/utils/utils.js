@@ -3,6 +3,8 @@
  */
 
 const Long = require('long');
+const { createModuleLogger, sanitizeMeta } = require('../services/logger');
+const coreLogger = createModuleLogger('core');
 
 // ============ 服务器时间状态 ============
 let serverTimeMs = 0;
@@ -57,7 +59,7 @@ function setLogHook(hook) { logHook = hook; }
 
 function normalizeMeta(meta) {
     if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return {};
-    return { ...meta };
+    return sanitizeMeta(meta);
 }
 
 function resolveModuleTag(moduleName) {
@@ -113,9 +115,9 @@ function log(arg1, arg2, arg3 = null) {
     const safeMeta = normalizeMeta(meta);
     if (!safeMeta.module) safeMeta.module = inferModuleFromTag(tag);
     const displayTag = resolveModuleTag(safeMeta.module);
-    console.log(`[${now()}] [${displayTag}] ${msg}`);
+    coreLogger.info(msg, { tag: displayTag, ...safeMeta });
     if (logHook) {
-        try { logHook(displayTag, msg, false, safeMeta); } catch (e) {}
+        try { logHook(displayTag, msg, false, safeMeta); } catch {}
     }
 }
 
@@ -124,9 +126,9 @@ function logWarn(arg1, arg2, arg3 = null) {
     const safeMeta = normalizeMeta(meta);
     if (!safeMeta.module) safeMeta.module = inferModuleFromTag(tag);
     const displayTag = resolveModuleTag(safeMeta.module);
-    console.log(`[${now()}] [${displayTag}] ⚠ ${msg}`);
+    coreLogger.warn(msg, { tag: displayTag, ...safeMeta });
     if (logHook) {
-        try { logHook(displayTag, msg, true, safeMeta); } catch (e) {}
+        try { logHook(displayTag, msg, true, safeMeta); } catch {}
     }
 }
 

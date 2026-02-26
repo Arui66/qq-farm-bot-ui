@@ -11,15 +11,16 @@ import { useStatusStore } from '@/stores/status'
 const accountStore = useAccountStore()
 const friendStore = useFriendStore()
 const statusStore = useStatusStore()
-const { currentAccountId } = storeToRefs(accountStore)
-const { friends, loading, friendLands, friendLandsLoading } = storeToRefs(friendStore)
-const { status, loading: statusLoading } = storeToRefs(statusStore)
+const { currentAccountId, currentAccount } = storeToRefs(accountStore)
+const { friends, loading, friendLands, friendLandsLoading, blacklist } = storeToRefs(friendStore)
+const { status, loading: statusLoading, realtimeConnected } = storeToRefs(statusStore)
 
 // Confirm Modal state
 const showConfirm = ref(false)
 const confirmMessage = ref('')
 const confirmLoading = ref(false)
 const pendingAction = ref<(() => Promise<void>) | null>(null)
+const avatarErrorKeys = ref<Set<string>>(new Set())
 
 function confirmAction(msg: string, action: () => Promise<void>) {
   confirmMessage.value = msg
@@ -47,20 +48,30 @@ async function onConfirm() {
 // Track expanded friends
 const expandedFriends = ref<Set<string>>(new Set())
 
-function loadFriends() {
+async function loadFriends() {
   if (currentAccountId.value) {
-    friendStore.fetchFriends(currentAccountId.value)
-    statusStore.fetchStatus(currentAccountId.value)
+    const acc = currentAccount.value
+    if (!acc)
+      return
+
+    if (!realtimeConnected.value) {
+      await statusStore.fetchStatus(currentAccountId.value)
+    }
+
+    if (acc.running && status.value?.connection?.connected) {
+      avatarErrorKeys.value.clear()
+      friendStore.fetchFriends(currentAccountId.value)
+      friendStore.fetchBlacklist(currentAccountId.value)
+    }
   }
 }
 
 useIntervalFn(() => {
   for (const gid in friendLands.value) {
     if (friendLands.value[gid]) {
-      friendLands.value[gid].forEach((l: any) => {
-        if (l.matureInSec > 0)
-          l.matureInSec--
-      })
+      friendLands.value[gid] = friendLands.value[gid].map((l: any) =>
+        l.matureInSec > 0 ? { ...l, matureInSec: l.matureInSec - 1 } : l,
+      )
     }
   }
 }, 1000)
@@ -74,6 +85,11 @@ watch(currentAccountId, () => {
   loadFriends()
 })
 
+// 每 30 秒自动刷新好友列表
+useIntervalFn(() => {
+  loadFriends()
+}, 30000)
+
 function toggleFriend(friendId: string) {
   if (expandedFriends.value.has(friendId)) {
     expandedFriends.value.delete(friendId)
@@ -84,20 +100,27 @@ function toggleFriend(friendId: string) {
     // So it behaves like an accordion.
     expandedFriends.value.clear()
     expandedFriends.value.add(friendId)
-    if (currentAccountId.value) {
+    if (currentAccountId.value && currentAccount.value?.running && status.value?.connection?.connected) {
       friendStore.fetchFriendLands(currentAccountId.value, friendId)
     }
   }
 }
 
 async function handleOp(friendId: string, type: string, e: Event) {
-  e.stopPropagation() // Prevent toggling
+  e.stopPropagation()
   if (!currentAccountId.value)
     return
 
   confirmAction('确定执行此操作吗?', async () => {
     await friendStore.operate(currentAccountId.value!, friendId, type)
   })
+}
+
+async function handleToggleBlacklist(friend: any, e: Event) {
+  e.stopPropagation()
+  if (!currentAccountId.value)
+    return
+  await friendStore.toggleBlacklist(currentAccountId.value, Number(friend.gid))
 }
 
 function getFriendStatusText(friend: any) {
@@ -112,6 +135,35 @@ function getFriendStatusText(friend: any) {
   if (p.insectNum)
     info.push(`虫${p.insectNum}`)
   return info.length ? info.join(' ') : '无操作'
+}
+
+function getFriendAvatar(friend: any) {
+  const direct = String(friend?.avatarUrl || friend?.avatar_url || '').trim()
+  if (direct)
+    return direct
+  const uin = String(friend?.uin || '').trim()
+  if (uin)
+    return `https://q1.qlogo.cn/g?b=qq&nk=${uin}&s=100`
+  return ''
+}
+
+function getFriendAvatarKey(friend: any) {
+  const key = String(friend?.gid || friend?.uin || '').trim()
+  return key || String(friend?.name || '').trim()
+}
+
+function canShowFriendAvatar(friend: any) {
+  const key = getFriendAvatarKey(friend)
+  if (!key)
+    return false
+  return !!getFriendAvatar(friend) && !avatarErrorKeys.value.has(key)
+}
+
+function handleFriendAvatarError(friend: any) {
+  const key = getFriendAvatarKey(friend)
+  if (!key)
+    return
+  avatarErrorKeys.value.add(key)
 }
 </script>
 
@@ -159,22 +211,24 @@ function getFriendStatusText(friend: any) {
       >
         <div
           class="flex flex-col cursor-pointer justify-between gap-4 p-4 transition sm:flex-row sm:items-center hover:bg-gray-50 dark:hover:bg-gray-700/50"
+          :class="blacklist.includes(Number(friend.gid)) ? 'opacity-50' : ''"
           @click="toggleFriend(friend.gid)"
         >
           <div class="flex items-center gap-3">
             <div class="h-10 w-10 flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-gray-200 ring-1 ring-gray-100 dark:bg-gray-600 dark:ring-gray-700">
               <img
-                v-if="friend.uin || friend.gid"
-                :src="`https://q1.qlogo.cn/g?b=qq&nk=${friend.uin || friend.gid}&s=100`"
+                v-if="canShowFriendAvatar(friend)"
+                :src="getFriendAvatar(friend)"
                 class="h-full w-full object-cover"
                 loading="lazy"
-                @error="(e) => (e.target as HTMLImageElement).style.display = 'none'"
+                @error="handleFriendAvatarError(friend)"
               >
               <div v-else class="i-carbon-user text-gray-400" />
             </div>
             <div>
-              <div class="font-bold">
+              <div class="flex items-center gap-2 font-bold">
                 {{ friend.name }}
+                <span v-if="blacklist.includes(Number(friend.gid))" class="rounded bg-gray-200 px-1.5 py-0.5 text-xs text-gray-500 dark:bg-gray-700 dark:text-gray-400">已屏蔽</span>
               </div>
               <div class="text-sm" :class="getFriendStatusText(friend) !== '无操作' ? 'text-green-500 font-medium' : 'text-gray-400'">
                 {{ getFriendStatusText(friend) }}
@@ -184,34 +238,43 @@ function getFriendStatusText(friend: any) {
 
           <div class="flex flex-wrap gap-2">
             <button
-              class="rounded bg-blue-100 px-3 py-1 text-sm text-blue-700 transition hover:bg-blue-200"
+              class="rounded bg-blue-100 px-3 py-2 text-sm text-blue-700 transition hover:bg-blue-200"
               @click="handleOp(friend.gid, 'steal', $event)"
             >
               偷取
             </button>
             <button
-              class="rounded bg-cyan-100 px-3 py-1 text-sm text-cyan-700 transition hover:bg-cyan-200"
+              class="rounded bg-cyan-100 px-3 py-2 text-sm text-cyan-700 transition hover:bg-cyan-200"
               @click="handleOp(friend.gid, 'water', $event)"
             >
               浇水
             </button>
             <button
-              class="rounded bg-green-100 px-3 py-1 text-sm text-green-700 transition hover:bg-green-200"
+              class="rounded bg-green-100 px-3 py-2 text-sm text-green-700 transition hover:bg-green-200"
               @click="handleOp(friend.gid, 'weed', $event)"
             >
               除草
             </button>
             <button
-              class="rounded bg-orange-100 px-3 py-1 text-sm text-orange-700 transition hover:bg-orange-200"
+              class="rounded bg-orange-100 px-3 py-2 text-sm text-orange-700 transition hover:bg-orange-200"
               @click="handleOp(friend.gid, 'bug', $event)"
             >
               除虫
             </button>
             <button
-              class="rounded bg-red-100 px-3 py-1 text-sm text-red-700 transition hover:bg-red-200"
+              class="rounded bg-red-100 px-3 py-2 text-sm text-red-700 transition hover:bg-red-200"
               @click="handleOp(friend.gid, 'bad', $event)"
             >
               捣乱
+            </button>
+            <button
+              class="rounded px-3 py-2 text-sm transition"
+              :class="blacklist.includes(Number(friend.gid))
+                ? 'bg-gray-200 text-gray-600 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
+                : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-gray-700/50 dark:text-gray-400 dark:hover:bg-gray-700'"
+              @click="handleToggleBlacklist(friend, $event)"
+            >
+              {{ blacklist.includes(Number(friend.gid)) ? '移出黑名单' : '加入黑名单' }}
             </button>
           </div>
         </div>
@@ -223,7 +286,7 @@ function getFriendStatusText(friend: any) {
           <div v-else-if="!friendLands[friend.gid] || friendLands[friend.gid]?.length === 0" class="py-4 text-center text-gray-500">
             无土地数据
           </div>
-          <div v-else class="grid grid-cols-3 gap-2 lg:grid-cols-8 md:grid-cols-5 sm:grid-cols-4">
+          <div v-else class="grid grid-cols-2 gap-2 lg:grid-cols-8 md:grid-cols-5 sm:grid-cols-4">
             <LandCard
               v-for="land in friendLands[friend.gid]"
               :key="land.id"

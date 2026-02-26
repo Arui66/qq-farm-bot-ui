@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useIntervalFn } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { onMounted, ref, watch } from 'vue'
 import { useAccountStore } from '@/stores/account'
@@ -8,16 +9,25 @@ import { useStatusStore } from '@/stores/status'
 const accountStore = useAccountStore()
 const bagStore = useBagStore()
 const statusStore = useStatusStore()
-const { currentAccountId } = storeToRefs(accountStore)
+const { currentAccountId, currentAccount } = storeToRefs(accountStore)
 const { items, loading: bagLoading } = storeToRefs(bagStore)
-const { status, loading: statusLoading, error: statusError } = storeToRefs(statusStore)
+const { status, loading: statusLoading, error: statusError, realtimeConnected } = storeToRefs(statusStore)
 
 const imageErrors = ref<Record<string | number, boolean>>({})
 
-function loadBag() {
+async function loadBag() {
   if (currentAccountId.value) {
-    bagStore.fetchBag(currentAccountId.value)
-    statusStore.fetchStatus(currentAccountId.value)
+    const acc = currentAccount.value
+    if (!acc)
+      return
+
+    if (!realtimeConnected.value) {
+      await statusStore.fetchStatus(currentAccountId.value)
+    }
+
+    if (acc.running && status.value?.connection?.connected) {
+      bagStore.fetchBag(currentAccountId.value)
+    }
     // 重置图片错误状态
     imageErrors.value = {}
   }
@@ -30,6 +40,8 @@ onMounted(() => {
 watch(currentAccountId, () => {
   loadBag()
 })
+
+useIntervalFn(loadBag, 60000)
 </script>
 
 <template>

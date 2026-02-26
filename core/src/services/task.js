@@ -2,23 +2,27 @@
  * 任务系统 - 自动领取任务奖励
  */
 
-const { types } = require('../utils/proto');
-const { sendMsgAsync, networkEvents } = require('../utils/network');
-const { recordOperation } = require('./stats');
 const { isAutomationOn } = require('../models/store');
+const { sendMsgAsync, networkEvents } = require('../utils/network');
+const { types } = require('../utils/proto');
 const { toLong, toNum, log, logWarn, sleep } = require('../utils/utils');
+const { createScheduler } = require('./scheduler');
+const { recordOperation } = require('./stats');
 
-let initTimer = null;
-let claimTimer = null;
 let checking = false;
 let taskClaimDoneDateKey = '';
 let taskClaimLastAt = 0;
+const taskScheduler = createScheduler('task');
 
 function getDateKey() {
-    const now = new Date();
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, '0');
-    const d = String(now.getDate()).padStart(2, '0');
+    const { getServerTimeSec } = require('../utils/utils');
+    const nowSec = getServerTimeSec();
+    const nowMs = nowSec > 0 ? nowSec * 1000 : Date.now();
+    const bjOffset = 8 * 3600 * 1000;
+    const bjDate = new Date(nowMs + bjOffset);
+    const y = bjDate.getUTCFullYear();
+    const m = String(bjDate.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(bjDate.getUTCDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
 }
 
@@ -71,7 +75,7 @@ async function getTicketBalanceFromBag() {
             if (toNum(it && it.id) === 1002) return Math.max(0, toNum(it && it.count));
         }
         return 0;
-    } catch (e) {
+    } catch {
         return 0;
     }
 }
@@ -91,28 +95,6 @@ function formatTask(t, category = 'main') {
         rewards: (t.rewards || []).map(r => ({ id: toNum(r.id), count: toNum(r.count) })),
         canClaim: t.is_unlocked && !t.is_claimed && toNum(t.progress) >= toNum(t.total_progress) && toNum(t.total_progress) > 0
     };
-}
-
-/**
- * 获取所有任务列表（供前端展示）
- */
-async function getAllTasks() {
-    try {
-        const reply = await getTaskInfo();
-        if (!reply.task_info) return {};
-        
-        const ti = reply.task_info;
-        return {
-            daily: (ti.daily_tasks || []).map(formatTask),
-            growth: (ti.growth_tasks || []).map(formatTask),
-            main: (ti.tasks || []).map(formatTask),
-        };
-    } catch (e) {
-        logWarn('任务', `获取列表失败: ${e.message}`, {
-            module: 'task', event: 'task_list', result: 'error'
-        });
-        return {};
-    }
 }
 
 /**
@@ -216,7 +198,7 @@ async function checkAndClaimIllustratedRewards() {
         taskClaimLastAt = Date.now();
         recordOperation('taskClaim', 1);
         return true;
-    } catch (e) {
+    } catch {
         return false;
     }
 }
@@ -229,7 +211,7 @@ async function checkAndClaimTasks() {
     checking = true;
     try {
         const reply = await getTaskInfo();
-        if (!reply.task_info) return;
+        if (!reply.task_info) { checking = false; return; }
 
         const taskInfo = reply.task_info;
         const dailyAll = buildDailyTasksForDebug(taskInfo);
@@ -287,7 +269,7 @@ async function doClaim(task) {
         recordOperation('taskClaim', 1);
         await sleep(300);
         return true;
-    } catch (e) {
+    } catch {
         // 领取失败静默处理
         return false;
     }
@@ -308,13 +290,11 @@ function onTaskInfoNotify(taskInfo) {
     if (hasClaimable) log('任务', `有 ${claimable.length} 个任务可领取，准备自动领取...`, {
         module: 'task', event: 'task_claim', result: 'plan', count: claimable.length
     });
-    if (claimTimer) clearTimeout(claimTimer);
-    claimTimer = setTimeout(async () => {
-        claimTimer = null;
+    taskScheduler.setTimeoutTask('task_claim_debounce', 1000, async () => {
         if (hasClaimable) await claimTasksFromList(claimable);
         await checkAndClaimActives(actives);
         await checkAndClaimIllustratedRewards();
-    }, 1000);
+    });
 }
 
 async function claimTasksFromList(claimable) {
@@ -329,22 +309,14 @@ async function claimTasksFromList(claimable) {
 function initTaskSystem() {
     cleanupTaskSystem();
     networkEvents.on('taskInfoNotify', onTaskInfoNotify);
-    initTimer = setTimeout(() => {
-        initTimer = null;
+    taskScheduler.setTimeoutTask('task_init_bootstrap', 4000, () => {
         checkAndClaimTasks();
-    }, 4000);
+    });
 }
 
 function cleanupTaskSystem() {
     networkEvents.off('taskInfoNotify', onTaskInfoNotify);
-    if (initTimer) {
-        clearTimeout(initTimer);
-        initTimer = null;
-    }
-    if (claimTimer) {
-        clearTimeout(claimTimer);
-        claimTimer = null;
-    }
+    taskScheduler.clearAll();
     checking = false;
 }
 
@@ -352,7 +324,6 @@ module.exports = {
     checkAndClaimTasks,
     initTaskSystem,
     cleanupTaskSystem,
-    getAllTasks,
     claimTaskReward,
     doClaim, // 供手动领取使用
     getTaskClaimDailyState: () => ({
@@ -388,7 +359,7 @@ module.exports = {
                 completedCount,
                 totalCount: 3,
             };
-        } catch (e) {
+        } catch {
             return {
                 key: 'task_claim',
                 doneToday: false,
@@ -430,7 +401,7 @@ module.exports = {
                 totalCount,
                 tasks,
             };
-        } catch (e) {
+        } catch {
             return {
                 key: 'growth_task',
                 doneToday: false,

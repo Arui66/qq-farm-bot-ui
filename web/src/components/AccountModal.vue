@@ -219,7 +219,7 @@ watch(() => props.show, (newVal) => {
           {{ editData ? '编辑账号' : '添加账号' }}
         </h3>
         <BaseButton variant="ghost" class="!p-1" @click="close">
-          <div i-carbon-close class="text-xl" />
+          <div class="i-carbon-close text-xl" />
         </BaseButton>
       </div>
 

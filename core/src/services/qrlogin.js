@@ -1,7 +1,9 @@
+const { Buffer } = require('node:buffer');
 /**
  * QR Code Login Module - 从 QRLib 集成
  */
 const axios = require('axios');
+const QRCode = require('qrcode');
 const { CookieUtils, HashUtils } = require('../utils/qrutils');
 
 const ChromeUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -102,12 +104,11 @@ class QRLoginSession {
 
             const args = [];
             const argMatcher = /'([^']*)'/g;
-            let argMatch;
-            while ((argMatch = argMatcher.exec(match[1])) !== null) {
+            for (let argMatch = argMatcher.exec(match[1]); argMatch !== null; argMatch = argMatcher.exec(match[1])) {
                 args.push(argMatch[1]);
             }
 
-            const [ret, extret, jumpUrl, redirect, msg, nickname] = args;
+            const [ret, , jumpUrl, , msg, nickname] = args;
 
             return {
                 ret,
@@ -158,14 +159,16 @@ class MiniProgramLoginSession {
 
             const loginCode = data.code || '';
             const loginUrl = `https://h5.qzone.qq.com/qqq/code/${loginCode}?_proxy=1&from=ide`;
-            
-            // 生成二维码图片（使用在线 API）
-            const qrcodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(loginUrl)}`;
+            const image = await QRCode.toDataURL(loginUrl, {
+                width: 300,
+                margin: 1,
+                errorCorrectionLevel: 'M',
+            });
 
             return {
                 code: loginCode,
                 url: loginUrl,
-                qrcode: qrcodeUrl
+                image,
             };
         } catch (error) {
             console.error('MP Request Login Code Error:', error.message);
@@ -203,8 +206,8 @@ class MiniProgramLoginSession {
     static async getAuthCode(ticket, appid = '1112386029') {
         try {
             const response = await axios.post('https://q.qq.com/ide/login', {
-                appid: appid,
-                ticket: ticket
+                appid,
+                ticket
             }, {
                 headers: this.getHeaders()
             });

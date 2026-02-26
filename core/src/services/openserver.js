@@ -1,19 +1,18 @@
 /**
- * 月卡礼包
+ * 开服红包每日领取
  */
 
 const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { log, toNum } = require('../utils/utils');
 
-const DAILY_KEY = 'month_card_gift';
+const DAILY_KEY = 'open_server_gift';
 const CHECK_COOLDOWN_MS = 10 * 60 * 1000;
 
 let doneDateKey = '';
 let lastCheckAt = 0;
 let lastClaimAt = 0;
 let lastResult = '';
-let lastHasCard = null;
 let lastHasClaimable = null;
 
 function getDateKey() {
@@ -47,90 +46,107 @@ function getRewardSummary(items) {
     return summary.join('/');
 }
 
-async function getMonthCardInfos() {
-    const body = types.GetMonthCardInfosRequest.encode(types.GetMonthCardInfosRequest.create({})).finish();
-    const { body: replyBody } = await sendMsgAsync('gamepb.mallpb.MallService', 'GetMonthCardInfos', body);
-    return types.GetMonthCardInfosReply.decode(replyBody);
+function isAlreadyClaimedError(err) {
+    const msg = String((err && err.message) || '');
+    return msg.includes('已领取') || msg.includes('今日参与次数已达上限') || msg.includes('次数已达上限');
 }
 
-async function claimMonthCardReward(goodsId) {
-    const body = types.ClaimMonthCardRewardRequest.encode(types.ClaimMonthCardRewardRequest.create({
-        goods_id: Number(goodsId) || 0,
+async function getTodayClaimStatus() {
+    const body = types.GetTodayClaimStatusRequest.encode(types.GetTodayClaimStatusRequest.create({})).finish();
+    const { body: replyBody } = await sendMsgAsync('gamepb.redpacketpb.RedPacketService', 'GetTodayClaimStatus', body);
+    return types.GetTodayClaimStatusReply.decode(replyBody);
+}
+
+async function claimRedPacket(id) {
+    const body = types.ClaimRedPacketRequest.encode(types.ClaimRedPacketRequest.create({
+        id: Number(id) || 0,
     })).finish();
-    const { body: replyBody } = await sendMsgAsync('gamepb.mallpb.MallService', 'ClaimMonthCardReward', body);
-    return types.ClaimMonthCardRewardReply.decode(replyBody);
+    const { body: replyBody } = await sendMsgAsync('gamepb.redpacketpb.RedPacketService', 'ClaimRedPacket', body);
+    return types.ClaimRedPacketReply.decode(replyBody);
 }
 
-async function performDailyMonthCardGift(force = false) {
+async function performDailyOpenServerGift(force = false) {
     const now = Date.now();
     if (!force && isDoneToday()) return false;
     if (!force && now - lastCheckAt < CHECK_COOLDOWN_MS) return false;
     lastCheckAt = now;
 
     try {
-        const rep = await getMonthCardInfos();
-        const infos = Array.isArray(rep && rep.infos) ? rep.infos : [];
-        lastHasCard = infos.length > 0;
-        const claimable = infos.filter((x) => x && x.can_claim && Number(x.goods_id || 0) > 0);
+        const status = await getTodayClaimStatus();
+        const infos = Array.isArray(status && status.infos) ? status.infos : [];
+        const claimable = infos.filter((x) => x && x.can_claim && Number(x.id || 0) > 0);
         lastHasClaimable = claimable.length > 0;
-        if (!infos.length) {
-            markDoneToday();
-            lastResult = 'none';
-            log('月卡', '当前没有月卡或已过期', {
-                module: 'task',
-                event: DAILY_KEY,
-                result: 'none',
-            });
-            return false;
-        }
+
         if (!claimable.length) {
             markDoneToday();
             lastResult = 'none';
-            log('月卡', '今日暂无可领取月卡礼包', {
+            log('开服', '今日暂无可领取开服红包', {
                 module: 'task',
                 event: DAILY_KEY,
                 result: 'none',
             });
             return false;
         }
+
         let claimed = 0;
+        let alreadyDoneToday = false;
         for (const info of claimable) {
+            const packetId = Number(info.id || 0);
             try {
-                const ret = await claimMonthCardReward(Number(info.goods_id || 0));
-                const items = Array.isArray(ret && ret.items) ? ret.items : [];
+                const ret = await claimRedPacket(packetId);
+                const items = ret && ret.item ? [ret.item] : [];
                 const reward = getRewardSummary(items);
-                log('月卡', reward ? `领取成功 → ${reward}` : '领取成功', {
+                log('开服', reward ? `领取成功 → ${reward}` : '领取成功', {
                     module: 'task',
                     event: DAILY_KEY,
                     result: 'ok',
-                    goodsId: Number(info.goods_id || 0),
+                    redPacketId: packetId,
                 });
                 claimed += 1;
             } catch (e) {
-                log('月卡', `领取失败(gid=${Number(info.goods_id || 0)}): ${e.message}`, {
+                if (isAlreadyClaimedError(e)) {
+                    alreadyDoneToday = true;
+                    break;
+                }
+                log('开服', `领取失败(id=${packetId}): ${e.message}`, {
                     module: 'task',
                     event: DAILY_KEY,
                     result: 'error',
-                    goodsId: Number(info.goods_id || 0),
+                    redPacketId: packetId,
                 });
             }
         }
-        if (claimed > 0) {
+
+        if (claimed > 0 || alreadyDoneToday) {
             lastClaimAt = Date.now();
             markDoneToday();
             lastResult = 'ok';
-            return true;
+            if (alreadyDoneToday && claimed === 0) {
+                log('开服', '今日开服红包已领取', {
+                    module: 'task',
+                    event: DAILY_KEY,
+                    result: 'ok',
+                });
+                return false;
+            }
+            return claimed > 0;
         }
-        log('月卡', '本次未成功领取月卡礼包', {
-            module: 'task',
-            event: DAILY_KEY,
-            result: 'none',
-        });
+
         lastResult = 'none';
         return false;
     } catch (e) {
+        if (isAlreadyClaimedError(e)) {
+            markDoneToday();
+            lastResult = 'none';
+            log('开服', '今日开服红包已领取', {
+                module: 'task',
+                event: DAILY_KEY,
+                result: 'none',
+            });
+            return false;
+        }
         lastResult = 'error';
-        log('月卡', `查询月卡礼包失败: ${e.message}`, {
+        log('开服', `领取开服红包失败: ${e.message}`, {
             module: 'task',
             event: DAILY_KEY,
             result: 'error',
@@ -140,14 +156,13 @@ async function performDailyMonthCardGift(force = false) {
 }
 
 module.exports = {
-    performDailyMonthCardGift,
-    getMonthCardDailyState: () => ({
+    performDailyOpenServerGift,
+    getOpenServerDailyState: () => ({
         key: DAILY_KEY,
         doneToday: isDoneToday(),
         lastCheckAt,
         lastClaimAt,
         result: lastResult,
-        hasCard: lastHasCard,
         hasClaimable: lastHasClaimable,
     }),
 };

@@ -3,16 +3,15 @@
  * 协议说明：BagReply 使用 item_bag（ItemBag），item_bag.items 才是背包物品列表
  */
 
-const { types } = require('../utils/proto');
-const { sendMsgAsync, networkEvents, getUserState } = require('../utils/network');
-const { toLong, toNum, log, logWarn, sleep } = require('../utils/utils');
-const { updateStatusGold } = require('./status');
+const protobuf = require('protobufjs');
 const { getFruitName, getPlantByFruitId, getPlantBySeedId, getItemById, getItemImageById } = require('../config/gameConfig');
 const { isAutomationOn } = require('../models/store');
-const protobuf = require('protobufjs');
+const { sendMsgAsync, networkEvents, getUserState } = require('../utils/network');
+const { types } = require('../utils/proto');
+const { toLong, toNum, log, logWarn, sleep } = require('../utils/utils');
+const { updateStatusGold } = require('./status');
 
 const SELL_BATCH_SIZE = 15;
-const FERTILIZER_GIFT_PACK_ID = 100003;
 const FERTILIZER_RELATED_IDS = new Set([
     100003, // 化肥礼包
     100004, // 有机化肥礼包
@@ -30,7 +29,6 @@ const ORGANIC_FERTILIZER_ITEM_HOURS = new Map([
 ]);
 let fertilizerGiftDoneDateKey = '';
 let fertilizerGiftLastOpenAt = 0;
-let fertilizerGiftNoopLogAt = 0;
 
 function getDateKey() {
     const now = new Date();
@@ -49,10 +47,16 @@ async function getBag() {
 }
 
 function toSellItem(item) {
-    const id = item.id != null ? toLong(item.id) : undefined;
-    const count = item.count != null ? toLong(item.count) : undefined;
-    const uid = item.uid != null ? toLong(item.uid) : undefined;
-    return { id, count, uid };
+    const idNum = toNum(item && item.id);
+    const countNum = toNum(item && item.count);
+    const uidNum = toNum(item && item.uid);
+    const payload = {
+        id: toLong(idNum),
+        count: toLong(countNum),
+    };
+    // SellRequest 通常只需要 id + count；仅在 uid 有效时携带
+    if (uidNum > 0) payload.uid = toLong(uidNum);
+    return payload;
 }
 
 async function sellItems(items) {
@@ -212,7 +216,7 @@ async function autoOpenFertilizerGiftPacks() {
             try {
                 await batchUseItems([{ itemId, count: useCount, uid: 0 }]);
                 used = useCount;
-            } catch (e) {
+            } catch {
                 // 临时关闭回退 Use：BatchUse 失败时直接跳过该条目
                 // await useItem(itemId, 999, []);
                 // used = useCount;
@@ -391,12 +395,7 @@ async function sellAllFruits() {
         for (const item of items) {
             const id = toNum(item.id);
             const count = toNum(item.count);
-            const uid = item.uid ? toNum(item.uid) : 0;
             if (isFruitItemId(id) && count > 0) {
-                if (uid === 0) {
-                    logWarn('仓库', `跳过无效物品: ID=${id} Count=${count} (UID丢失)`);
-                    continue;
-                }
                 toSell.push(item);
                 names.push(`${getFruitName(id)}x${count}`);
             }
@@ -467,7 +466,7 @@ async function sellAllFruits() {
                 const bagAfter = await getBag();
                 const bagGold = getGoldFromItems(getBagItems(bagAfter));
                 if (bagGold > goldBefore) bagDelta = bagGold - goldBefore;
-            } catch (e) {}
+            } catch {}
         }
 
         const totalGoldEarned = Math.max(serverGoldTotal, totalGoldDelta, bagDelta);

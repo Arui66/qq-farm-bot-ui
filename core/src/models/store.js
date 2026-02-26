@@ -1,9 +1,10 @@
+const process = require('node:process');
 /**
  * 运行时存储 - 自动化开关、种子偏好、账号管理
  */
 
-const fs = require('fs');
 const { getDataFile, ensureDataDir } = require('../config/runtime-paths');
+const { readTextFile, readJsonFile, writeJsonFileAtomic } = require('../services/json-db');
 
 const STORE_FILE = getDataFile('store.json');
 const ACCOUNTS_FILE = getDataFile('accounts.json');
@@ -42,6 +43,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
         share_reward: true,
         vip_gift: true,
         month_card: true,
+        open_server_gift: true,
         sell: true,
         fertilizer: 'both',
     },
@@ -60,6 +62,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
         start: '23:00',
         end: '07:00',
     },
+    friendBlacklist: [],
 };
 const ALLOWED_AUTOMATION_KEYS = new Set(Object.keys(DEFAULT_ACCOUNT_CONFIG.automation));
 
@@ -70,7 +73,7 @@ let accountFallbackConfig = {
     friendQuietHours: { ...DEFAULT_ACCOUNT_CONFIG.friendQuietHours },
 };
 
-let globalConfig = {
+const globalConfig = {
     accountConfigs: {},
     defaultAccountConfig: cloneAccountConfig(DEFAULT_ACCOUNT_CONFIG),
     ui: {
@@ -82,7 +85,7 @@ let globalConfig = {
 
 function normalizeOfflineReminder(input) {
     const src = (input && typeof input === 'object') ? input : {};
-    let offlineDeleteSec = parseInt(src.offlineDeleteSec, 10);
+    let offlineDeleteSec = Number.parseInt(src.offlineDeleteSec, 10);
     if (!Number.isFinite(offlineDeleteSec) || offlineDeleteSec < 1) {
         offlineDeleteSec = DEFAULT_OFFLINE_REMINDER.offlineDeleteSec;
     }
@@ -134,15 +137,17 @@ function cloneAccountConfig(base = DEFAULT_ACCOUNT_CONFIG) {
         if (srcAutomation[key] !== undefined) automation[key] = srcAutomation[key];
     }
 
+    const rawBlacklist = Array.isArray(base.friendBlacklist) ? base.friendBlacklist : [];
     return {
         ...base,
         automation,
         intervals: { ...(base.intervals || DEFAULT_ACCOUNT_CONFIG.intervals) },
         friendQuietHours: { ...(base.friendQuietHours || DEFAULT_ACCOUNT_CONFIG.friendQuietHours) },
+        friendBlacklist: rawBlacklist.map(Number).filter(n => Number.isFinite(n) && n > 0),
         plantingStrategy: ALLOWED_PLANTING_STRATEGIES.includes(String(base.plantingStrategy || ''))
             ? String(base.plantingStrategy)
             : DEFAULT_ACCOUNT_CONFIG.plantingStrategy,
-        preferredSeedId: Math.max(0, parseInt(base.preferredSeedId, 10) || 0),
+        preferredSeedId: Math.max(0, Number.parseInt(base.preferredSeedId, 10) || 0),
     };
 }
 
@@ -174,13 +179,13 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     }
 
     if (src.preferredSeedId !== undefined && src.preferredSeedId !== null) {
-        cfg.preferredSeedId = Math.max(0, parseInt(src.preferredSeedId, 10) || 0);
+        cfg.preferredSeedId = Math.max(0, Number.parseInt(src.preferredSeedId, 10) || 0);
     }
 
     if (src.intervals && typeof src.intervals === 'object') {
         for (const [type, sec] of Object.entries(src.intervals)) {
             if (cfg.intervals[type] === undefined) continue;
-            cfg.intervals[type] = Math.max(1, parseInt(sec, 10) || cfg.intervals[type] || 1);
+            cfg.intervals[type] = Math.max(1, Number.parseInt(sec, 10) || cfg.intervals[type] || 1);
         }
         cfg.intervals = normalizeIntervals(cfg.intervals);
     } else {
@@ -194,6 +199,10 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
             start: normalizeTimeString(src.friendQuietHours.start, old.start || '23:00'),
             end: normalizeTimeString(src.friendQuietHours.end, old.end || '07:00'),
         };
+    }
+
+    if (Array.isArray(src.friendBlacklist)) {
+        cfg.friendBlacklist = src.friendBlacklist.map(Number).filter(n => Number.isFinite(n) && n > 0);
     }
 
     return cfg;
@@ -231,30 +240,28 @@ function removeAccountConfig(accountId) {
 function loadGlobalConfig() {
     ensureDataDir();
     try {
-        if (fs.existsSync(STORE_FILE)) {
-            const data = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8'));
-            if (data && typeof data === 'object') {
-                if (data.defaultAccountConfig && typeof data.defaultAccountConfig === 'object') {
-                    accountFallbackConfig = normalizeAccountConfig(data.defaultAccountConfig, DEFAULT_ACCOUNT_CONFIG);
-                } else {
-                    accountFallbackConfig = cloneAccountConfig(DEFAULT_ACCOUNT_CONFIG);
-                }
-                globalConfig.defaultAccountConfig = cloneAccountConfig(accountFallbackConfig);
+        const data = readJsonFile(STORE_FILE, () => ({}));
+        if (data && typeof data === 'object') {
+            if (data.defaultAccountConfig && typeof data.defaultAccountConfig === 'object') {
+                accountFallbackConfig = normalizeAccountConfig(data.defaultAccountConfig, DEFAULT_ACCOUNT_CONFIG);
+            } else {
+                accountFallbackConfig = cloneAccountConfig(DEFAULT_ACCOUNT_CONFIG);
+            }
+            globalConfig.defaultAccountConfig = cloneAccountConfig(accountFallbackConfig);
 
-                const cfgMap = (data.accountConfigs && typeof data.accountConfigs === 'object')
-                    ? data.accountConfigs
-                    : {};
-                globalConfig.accountConfigs = {};
-                for (const [id, cfg] of Object.entries(cfgMap)) {
-                    const sid = String(id || '').trim();
-                    if (!sid) continue;
-                    globalConfig.accountConfigs[sid] = normalizeAccountConfig(cfg, accountFallbackConfig);
-                }
-                // 统一规范化，确保内存中不残留旧字段（如 automation.friend）
-                globalConfig.defaultAccountConfig = cloneAccountConfig(accountFallbackConfig);
-                for (const [id, cfg] of Object.entries(globalConfig.accountConfigs)) {
-                    globalConfig.accountConfigs[id] = normalizeAccountConfig(cfg, accountFallbackConfig);
-                }
+            const cfgMap = (data.accountConfigs && typeof data.accountConfigs === 'object')
+                ? data.accountConfigs
+                : {};
+            globalConfig.accountConfigs = {};
+            for (const [id, cfg] of Object.entries(cfgMap)) {
+                const sid = String(id || '').trim();
+                if (!sid) continue;
+                globalConfig.accountConfigs[sid] = normalizeAccountConfig(cfg, accountFallbackConfig);
+            }
+            // 统一规范化，确保内存中不残留旧字段（如 automation.friend）
+            globalConfig.defaultAccountConfig = cloneAccountConfig(accountFallbackConfig);
+            for (const [id, cfg] of Object.entries(globalConfig.accountConfigs)) {
+                globalConfig.accountConfigs[id] = normalizeAccountConfig(cfg, accountFallbackConfig);
             }
             globalConfig.ui = { ...globalConfig.ui, ...(data.ui || {}) };
             const theme = String(globalConfig.ui.theme || '').toLowerCase();
@@ -291,18 +298,14 @@ function sanitizeGlobalConfigBeforeSave() {
 function saveGlobalConfig() {
     ensureDataDir();
     try {
-        const oldJson = (() => {
-            try {
-                return fs.existsSync(STORE_FILE) ? fs.readFileSync(STORE_FILE, 'utf8') : '';
-            } catch { return ''; }
-        })();
+        const oldJson = readTextFile(STORE_FILE, '');
 
         sanitizeGlobalConfigBeforeSave();
         const newJson = JSON.stringify(globalConfig, null, 2);
         
         if (oldJson !== newJson) {
-            console.log('[系统] 正在保存配置到:', STORE_FILE);
-            fs.writeFileSync(STORE_FILE, newJson, 'utf8');
+            console.warn('[系统] 正在保存配置到:', STORE_FILE);
+            writeJsonFileAtomic(STORE_FILE, globalConfig);
         }
     } catch (e) {
         console.error('保存配置失败:', e.message);
@@ -334,6 +337,7 @@ function getConfigSnapshot(accountId) {
         preferredSeedId: cfg.preferredSeedId,
         intervals: { ...cfg.intervals },
         friendQuietHours: { ...cfg.friendQuietHours },
+        friendBlacklist: [...(cfg.friendBlacklist || [])],
         ui: { ...globalConfig.ui },
     };
 }
@@ -363,13 +367,13 @@ function applyConfigSnapshot(snapshot, options = {}) {
     }
 
     if (cfg.preferredSeedId !== undefined && cfg.preferredSeedId !== null) {
-        next.preferredSeedId = Math.max(0, parseInt(cfg.preferredSeedId, 10) || 0);
+        next.preferredSeedId = Math.max(0, Number.parseInt(cfg.preferredSeedId, 10) || 0);
     }
 
     if (cfg.intervals && typeof cfg.intervals === 'object') {
         for (const [type, sec] of Object.entries(cfg.intervals)) {
             if (next.intervals[type] === undefined) continue;
-            next.intervals[type] = Math.max(1, parseInt(sec, 10) || next.intervals[type] || 1);
+            next.intervals[type] = Math.max(1, Number.parseInt(sec, 10) || next.intervals[type] || 1);
         }
         next.intervals = normalizeIntervals(next.intervals);
     }
@@ -381,6 +385,10 @@ function applyConfigSnapshot(snapshot, options = {}) {
             start: normalizeTimeString(cfg.friendQuietHours.start, old.start || '23:00'),
             end: normalizeTimeString(cfg.friendQuietHours.end, old.end || '07:00'),
         };
+    }
+
+    if (Array.isArray(cfg.friendBlacklist)) {
+        next.friendBlacklist = cfg.friendBlacklist.map(Number).filter(n => Number.isFinite(n) && n > 0);
     }
 
     if (cfg.ui && typeof cfg.ui === 'object') {
@@ -407,16 +415,8 @@ function getPreferredSeed(accountId) {
     return getAccountConfigSnapshot(accountId).preferredSeedId;
 }
 
-function setPreferredSeed(seedId, accountId) {
-    return applyConfigSnapshot({ preferredSeedId: seedId }, { accountId });
-}
-
 function getPlantingStrategy(accountId) {
     return getAccountConfigSnapshot(accountId).plantingStrategy;
-}
-
-function setPlantingStrategy(strategy, accountId) {
-    return applyConfigSnapshot({ plantingStrategy: strategy }, { accountId });
 }
 
 function getIntervals(accountId) {
@@ -425,7 +425,7 @@ function getIntervals(accountId) {
 
 function normalizeIntervals(intervals) {
     const src = (intervals && typeof intervals === 'object') ? intervals : {};
-    const toSec = (v, d) => Math.max(1, parseInt(v, 10) || d);
+    const toSec = (v, d) => Math.max(1, Number.parseInt(v, 10) || d);
     const farm = toSec(src.farm, 2);
     const friend = toSec(src.friend, 10);
 
@@ -452,8 +452,8 @@ function normalizeTimeString(v, fallback) {
     const s = String(v || '').trim();
     const m = s.match(/^(\d{1,2}):(\d{1,2})$/);
     if (!m) return fallback;
-    const hh = Math.max(0, Math.min(23, parseInt(m[1], 10)));
-    const mm = Math.max(0, Math.min(59, parseInt(m[2], 10)));
+    const hh = Math.max(0, Math.min(23, Number.parseInt(m[1], 10)));
+    const mm = Math.max(0, Math.min(59, Number.parseInt(m[2], 10)));
     return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
 }
 
@@ -461,8 +461,16 @@ function getFriendQuietHours(accountId) {
     return { ...getAccountConfigSnapshot(accountId).friendQuietHours };
 }
 
-function setFriendQuietHours(cfg, accountId) {
-    return applyConfigSnapshot({ friendQuietHours: cfg || {} }, { accountId });
+function getFriendBlacklist(accountId) {
+    return [...(getAccountConfigSnapshot(accountId).friendBlacklist || [])];
+}
+
+function setFriendBlacklist(accountId, list) {
+    const current = getAccountConfigSnapshot(accountId);
+    const next = normalizeAccountConfig(current, accountFallbackConfig);
+    next.friendBlacklist = Array.isArray(list) ? list.map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
+    setAccountConfigSnapshot(accountId, next);
+    return [...next.friendBlacklist];
 }
 
 function getUI() {
@@ -489,17 +497,13 @@ function setOfflineReminder(cfg) {
 // ============ 账号管理 ============
 function loadAccounts() {
     ensureDataDir();
-    try {
-        if (fs.existsSync(ACCOUNTS_FILE)) {
-            return normalizeAccountsData(JSON.parse(fs.readFileSync(ACCOUNTS_FILE, 'utf8')));
-        }
-    } catch (e) {}
-    return { accounts: [], nextId: 1 };
+    const data = readJsonFile(ACCOUNTS_FILE, () => ({ accounts: [], nextId: 1 }));
+    return normalizeAccountsData(data);
 }
 
 function saveAccounts(data) {
     ensureDataDir();
-    fs.writeFileSync(ACCOUNTS_FILE, JSON.stringify(normalizeAccountsData(data), null, 2), 'utf8');
+    writeJsonFileAtomic(ACCOUNTS_FILE, normalizeAccountsData(data));
 }
 
 function getAccounts() {
@@ -509,8 +513,8 @@ function getAccounts() {
 function normalizeAccountsData(raw) {
     const data = raw && typeof raw === 'object' ? raw : {};
     const accounts = Array.isArray(data.accounts) ? data.accounts : [];
-    const maxId = accounts.reduce((m, a) => Math.max(m, parseInt(a && a.id, 10) || 0), 0);
-    let nextId = parseInt(data.nextId, 10);
+    const maxId = accounts.reduce((m, a) => Math.max(m, Number.parseInt(a && a.id, 10) || 0), 0);
+    let nextId = Number.parseInt(data.nextId, 10);
     if (!Number.isFinite(nextId) || nextId <= 0) nextId = maxId + 1;
     if (accounts.length === 0) nextId = 1;
     if (nextId <= maxId) nextId = maxId + 1;
@@ -560,12 +564,11 @@ module.exports = {
     setAutomation,
     isAutomationOn,
     getPreferredSeed,
-    setPreferredSeed,
     getPlantingStrategy,
-    setPlantingStrategy,
     getIntervals,
     getFriendQuietHours,
-    setFriendQuietHours,
+    getFriendBlacklist,
+    setFriendBlacklist,
     getUI,
     setUITheme,
     getOfflineReminder,

@@ -1,10 +1,11 @@
+const { Buffer } = require('node:buffer');
 /**
  * 商城自动购买
  * 当前实现：自动购买有机化肥（item_id=1012）
  */
 
-const { types } = require('../utils/proto');
 const { sendMsgAsync, getUserState } = require('../utils/network');
+const { types } = require('../utils/proto');
 const { toNum, log, sleep } = require('../utils/utils');
 
 const ORGANIC_FERTILIZER_MALL_GOODS_ID = 1002;
@@ -53,7 +54,7 @@ async function getMallGoodsList(slotType = 1) {
     for (const b of raw) {
         try {
             goods.push(types.MallGoods.decode(b));
-        } catch (e) {
+        } catch {
             // ignore
         }
     }
@@ -77,7 +78,7 @@ function parseMallPriceValue(priceField) {
         let shift = 0;
         while (idx < bytes.length) {
             const b = bytes[idx++];
-            val |= (b & 0x7f) << shift;
+            val |= (b & 0x7F) << shift;
             if ((b & 0x80) === 0) break;
             shift += 7;
         }
@@ -153,7 +154,7 @@ async function autoBuyOrganicFertilizer(force = false) {
             });
         }
         return totalBought;
-    } catch (e) {
+    } catch {
         return 0;
     }
 }
@@ -175,7 +176,7 @@ async function buyFreeGifts(force = false) {
         for (const b of raw) {
             try {
                 goods.push(types.MallGoods.decode(b));
-            } catch (e) {
+            } catch {
                 // ignore
             }
         }
@@ -195,7 +196,7 @@ async function buyFreeGifts(force = false) {
             try {
                 await purchaseMallGoods(Number(g.goods_id || 0), 1);
                 bought += 1;
-            } catch (e) {
+            } catch {
                 // 单个失败跳过
             }
         }

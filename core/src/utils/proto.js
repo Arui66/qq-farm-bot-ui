@@ -3,8 +3,8 @@
  */
 
 const protobuf = require('protobufjs');
-const { log } = require('./utils');
 const { getResourcePath } = require('../config/runtime-paths');
+const { log } = require('./utils');
 
 // Proto 根对象与所有消息类型
 let root = null;
@@ -26,6 +26,7 @@ async function loadProto() {
         getResourcePath('proto', 'itempb.proto'),
         getResourcePath('proto', 'emailpb.proto'),
         getResourcePath('proto', 'mallpb.proto'),
+        getResourcePath('proto', 'redpacketpb.proto'),
         getResourcePath('proto', 'qqvippb.proto'),
         getResourcePath('proto', 'sharepb.proto'),
         getResourcePath('proto', 'illustratedpb.proto'),
@@ -93,6 +94,10 @@ async function loadProto() {
     types.GetMonthCardInfosReply = root.lookupType('gamepb.mallpb.GetMonthCardInfosReply');
     types.ClaimMonthCardRewardRequest = root.lookupType('gamepb.mallpb.ClaimMonthCardRewardRequest');
     types.ClaimMonthCardRewardReply = root.lookupType('gamepb.mallpb.ClaimMonthCardRewardReply');
+    types.GetTodayClaimStatusRequest = root.lookupType('gamepb.redpacketpb.GetTodayClaimStatusRequest');
+    types.GetTodayClaimStatusReply = root.lookupType('gamepb.redpacketpb.GetTodayClaimStatusReply');
+    types.ClaimRedPacketRequest = root.lookupType('gamepb.redpacketpb.ClaimRedPacketRequest');
+    types.ClaimRedPacketReply = root.lookupType('gamepb.redpacketpb.ClaimRedPacketReply');
     types.GetMallListBySlotTypeRequest = root.lookupType('gamepb.mallpb.GetMallListBySlotTypeRequest');
     types.GetMallListBySlotTypeResponse = root.lookupType('gamepb.mallpb.GetMallListBySlotTypeResponse');
     types.MallGoods = root.lookupType('gamepb.mallpb.MallGoods');

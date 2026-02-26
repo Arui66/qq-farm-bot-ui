@@ -1,3 +1,4 @@
+const process = require('node:process');
 /**
  * 配置常量与枚举定义
  */
@@ -14,7 +15,7 @@ const CONFIG = {
     farmCheckIntervalMax: 2000,   // 新逻辑：农场巡查间隔最大值(ms)
     friendCheckIntervalMin: 10000,// 新逻辑：好友巡查间隔最小值(ms)
     friendCheckIntervalMax: 10000,// 新逻辑：好友巡查间隔最大值(ms)
-    adminPort: 3000,             // 管理面板 HTTP 端口
+    adminPort: Number(process.env.ADMIN_PORT || 3000), // 管理面板 HTTP 端口
     adminPassword: process.env.ADMIN_PASSWORD || 'admin',
 };
 

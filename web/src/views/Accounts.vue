@@ -75,7 +75,7 @@ function handleSaved() {
 </script>
 
 <template>
-  <div class="mx-auto max-w-6xl p-4">
+  <div class="mx-auto max-w-6xl w-full p-4">
     <div class="mb-6 flex items-center justify-between">
       <h1 class="text-2xl font-bold">
         账号管理
@@ -84,7 +84,7 @@ function handleSaved() {
         variant="primary"
         @click="openAddModal"
       >
-        <div i-carbon-add class="mr-2" />
+        <div class="i-carbon-add mr-2" />
         添加账号
       </BaseButton>
     </div>
@@ -107,7 +107,7 @@ function handleSaved() {
       </BaseButton>
     </div>
 
-    <div v-else class="grid grid-cols-1 gap-4 lg:grid-cols-3 md:grid-cols-2">
+    <div v-else class="grid grid-cols-1 items-start gap-4 lg:grid-cols-3 sm:grid-cols-2">
       <div
         v-for="acc in accounts"
         :key="acc.id"
@@ -117,7 +117,7 @@ function handleSaved() {
           <div class="flex items-center gap-3">
             <div class="h-12 w-12 flex items-center justify-center overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
               <img v-if="acc.uin" :src="`https://q1.qlogo.cn/g?b=qq&nk=${acc.uin}&s=100`" class="h-full w-full object-cover">
-              <div v-else i-carbon-user class="text-2xl text-gray-400" />
+              <div v-else class="i-carbon-user text-2xl text-gray-400" />
             </div>
             <div>
               <h3 class="text-lg font-bold">

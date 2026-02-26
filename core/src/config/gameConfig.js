@@ -3,8 +3,8 @@
  * 从 gameConfig 目录加载配置数据
  */
 
-const fs = require('fs');
-const path = require('path');
+const fs = require('node:fs');
+const path = require('node:path');
 const { getResourcePath } = require('./runtime-paths');
 
 // ============ 等级经验表 ============
@@ -13,14 +13,14 @@ let levelExpTable = null;  // 累计经验表，索引为等级
 
 // ============ 植物配置 ============
 let plantConfig = null;
-let plantMap = new Map();  // id -> plant
-let seedToPlant = new Map();  // seed_id -> plant
-let fruitToPlant = new Map();  // fruit_id -> plant (果实ID -> 植物)
+const plantMap = new Map();  // id -> plant
+const seedToPlant = new Map();  // seed_id -> plant
+const fruitToPlant = new Map();  // fruit_id -> plant (果实ID -> 植物)
 let itemInfoConfig = null;
-let itemInfoMap = new Map();  // item_id -> item
-let seedItemMap = new Map();  // seed_id -> item(type=5)
-let seedImageMap = new Map(); // seed_id -> image url
-let seedAssetImageMap = new Map(); // asset_name (Crop_xxx) -> image url
+const itemInfoMap = new Map();  // item_id -> item
+const seedItemMap = new Map();  // seed_id -> item(type=5)
+const seedImageMap = new Map(); // seed_id -> image url
+const seedAssetImageMap = new Map(); // asset_name (Crop_xxx) -> image url
 
 /**
  * 加载配置文件
@@ -38,7 +38,7 @@ function loadConfigs() {
             for (const item of roleLevelConfig) {
                 levelExpTable[item.level] = item.exp;
             }
-            console.log(`[配置] 已加载等级经验表 (${roleLevelConfig.length} 级)`);
+            console.warn(`[配置] 已加载等级经验表 (${roleLevelConfig.length} 级)`);
         }
     } catch (e) {
         console.warn('[配置] 加载 RoleLevel.json 失败:', e.message);
@@ -61,7 +61,7 @@ function loadConfigs() {
                     fruitToPlant.set(plant.fruit.id, plant);
                 }
             }
-            console.log(`[配置] 已加载植物配置 (${plantConfig.length} 种)`);
+            console.warn(`[配置] 已加载植物配置 (${plantConfig.length} 种)`);
         }
     } catch (e) {
         console.warn('[配置] 加载 Plant.json 失败:', e.message);
@@ -82,7 +82,7 @@ function loadConfigs() {
                     seedItemMap.set(id, item);
                 }
             }
-            console.log(`[配置] 已加载物品配置 (${itemInfoConfig.length} 项)`);
+            console.warn(`[配置] 已加载物品配置 (${itemInfoConfig.length} 项)`);
         }
     } catch (e) {
         console.warn('[配置] 加载 ItemInfo.json 失败:', e.message);
@@ -100,7 +100,7 @@ function loadConfigs() {
                 const fileUrl = `/game-config/seed_images_named/${encodeURIComponent(file)}`;
 
                 // 1) id_..._Seed.png 命名，按 id 建立映射
-                const byId = filename.match(/^(\d+)_.*\.(png|jpg|jpeg|webp|gif)$/i);
+                const byId = filename.match(/^(\d+)_.*\.(?:png|jpg|jpeg|webp|gif)$/i);
                 if (byId) {
                     const seedId = Number(byId[1]) || 0;
                     if (seedId > 0 && !seedImageMap.has(seedId)) {
@@ -109,7 +109,7 @@ function loadConfigs() {
                 }
 
                 // 2) ...Crop_xxx_Seed.png 命名，按 asset_name 建立映射
-                const byAsset = filename.match(/(Crop_\d+)_Seed\.(png|jpg|jpeg|webp|gif)$/i);
+                const byAsset = filename.match(/(Crop_\d+)_Seed\.(?:png|jpg|jpeg|webp|gif)$/i);
                 if (byAsset) {
                     const assetName = byAsset[1];
                     if (assetName && !seedAssetImageMap.has(assetName)) {
@@ -117,7 +117,7 @@ function loadConfigs() {
                     }
                 }
             }
-            console.log(`[配置] 已加载种子图片映射 (${seedImageMap.size} 项)`);
+            console.warn(`[配置] 已加载种子图片映射 (${seedImageMap.size} 项)`);
         }
     } catch (e) {
         console.warn('[配置] 加载 seed_images_named 失败:', e.message);
@@ -188,21 +188,6 @@ function getPlantNameBySeedId(seedId) {
 }
 
 /**
- * 获取植物的果实信息
- * @param {number} plantId - 植物ID
- * @returns {{ id: number, count: number, name: string } | null}
- */
-function getPlantFruit(plantId) {
-    const plant = plantMap.get(plantId);
-    if (!plant || !plant.fruit) return null;
-    return {
-        id: plant.fruit.id,
-        count: plant.fruit.count,
-        name: plant.name,
-    };
-}
-
-/**
  * 获取植物的生长时间（秒）
  * @param {number} plantId - 植物ID
  */
@@ -216,7 +201,7 @@ function getPlantGrowTime(plantId) {
     for (const phase of phases) {
         const match = phase.match(/:(\d+)/);
         if (match) {
-            totalSeconds += parseInt(match[1]);
+            totalSeconds += Number.parseInt(match[1]);
         }
     }
     return totalSeconds;
@@ -315,11 +300,6 @@ function getItemById(itemId) {
     return itemInfoMap.get(Number(itemId) || 0);
 }
 
-function getSeedUnlockLevel(seedId) {
-    const item = seedItemMap.get(Number(seedId) || 0);
-    return item ? (Number(item.level) || 1) : 1;
-}
-
 function getSeedPrice(seedId) {
     const item = seedItemMap.get(Number(seedId) || 0);
     return item ? (Number(item.price) || 0) : 0;
@@ -349,7 +329,6 @@ module.exports = {
     getPlantBySeedId,
     getPlantName,
     getPlantNameBySeedId,
-    getPlantFruit,
     getPlantGrowTime,
     getPlantExp,
     formatGrowTime,
@@ -358,7 +337,6 @@ module.exports = {
     getPlantByFruitId,
     getItemById,
     getItemImageById,
-    getSeedUnlockLevel,
     getSeedPrice,
     getFruitPrice,
     getSeedImageBySeedId,

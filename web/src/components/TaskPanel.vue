@@ -7,14 +7,23 @@ import { useStatusStore } from '@/stores/status'
 
 const statusStore = useStatusStore()
 const accountStore = useAccountStore()
-const { status, dailyGifts } = storeToRefs(statusStore)
-const { currentAccountId } = storeToRefs(accountStore)
+const { status, dailyGifts, realtimeConnected } = storeToRefs(statusStore)
+const { currentAccountId, currentAccount } = storeToRefs(accountStore)
 
 const growth = computed(() => dailyGifts.value?.growth || null)
 
-function refresh() {
+async function refresh() {
   if (currentAccountId.value) {
-    statusStore.fetchDailyGifts(currentAccountId.value)
+    const acc = currentAccount.value
+    if (!acc)
+      return
+
+    if (!realtimeConnected.value) {
+      await statusStore.fetchStatus(currentAccountId.value)
+    }
+    if (acc.running && status.value?.connection?.connected) {
+      statusStore.fetchDailyGifts(currentAccountId.value)
+    }
   }
 }
 
@@ -29,8 +38,8 @@ watch(currentAccountId, () => {
 function formatTaskProgress(task: any) {
   if (!task)
     return '未开始'
-  const rawCurrent = task.current
-  const rawTarget = task.target
+  const rawCurrent = task.progress ?? task.current
+  const rawTarget = task.totalProgress ?? task.target
 
   const current = Number.isFinite(rawCurrent)
     ? rawCurrent

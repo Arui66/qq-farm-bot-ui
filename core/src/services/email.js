@@ -2,8 +2,8 @@
  * 邮箱系统 - 自动领取邮箱奖励
  */
 
-const { types } = require('../utils/proto');
 const { sendMsgAsync } = require('../utils/network');
+const { types } = require('../utils/proto');
 const { log, toNum } = require('../utils/utils');
 
 const DAILY_KEY = 'email_rewards';
@@ -137,7 +137,7 @@ async function checkAndClaimEmails(force = false) {
                     }
                     claimed += 1;
                 }
-            } catch (e) {
+            } catch {
                 // 批量失败静默，继续单领
             }
         }
@@ -150,7 +150,7 @@ async function checkAndClaimEmails(force = false) {
                     rewards.push(...rep.items);
                 }
                 claimed += 1;
-            } catch (e) {
+            } catch {
                 // 单封失败静默
             }
         }

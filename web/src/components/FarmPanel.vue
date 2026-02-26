@@ -12,8 +12,8 @@ const farmStore = useFarmStore()
 const accountStore = useAccountStore()
 const statusStore = useStatusStore()
 const { lands, summary, loading } = storeToRefs(farmStore)
-const { currentAccountId } = storeToRefs(accountStore)
-const { status, loading: statusLoading } = storeToRefs(statusStore)
+const { currentAccountId, currentAccount } = storeToRefs(accountStore)
+const { status, loading: statusLoading, realtimeConnected } = storeToRefs(statusStore)
 
 const operating = ref(false)
 const confirmVisible = ref(false)
@@ -64,10 +64,19 @@ const operations = [
   { type: 'all', label: '一键全收', icon: 'i-carbon-flash', color: 'bg-orange-600 hover:bg-orange-700' },
 ]
 
-function refresh() {
+async function refresh() {
   if (currentAccountId.value) {
-    farmStore.fetchLands(currentAccountId.value)
-    statusStore.fetchStatus(currentAccountId.value)
+    const acc = currentAccount.value
+    if (!acc)
+      return
+
+    if (!realtimeConnected.value) {
+      await statusStore.fetchStatus(currentAccountId.value)
+    }
+
+    if (acc.running && status.value?.connection?.connected) {
+      farmStore.fetchLands(currentAccountId.value)
+    }
   }
 }
 
@@ -77,20 +86,23 @@ watch(currentAccountId, () => {
 
 const { pause, resume } = useIntervalFn(() => {
   if (lands.value) {
-    lands.value.forEach((l: any) => {
-      if (l.matureInSec > 0)
-        l.matureInSec--
-    })
+    lands.value = lands.value.map((l: any) =>
+      l.matureInSec > 0 ? { ...l, matureInSec: l.matureInSec - 1 } : l,
+    )
   }
 }, 1000)
+
+const { pause: pauseRefresh, resume: resumeRefresh } = useIntervalFn(refresh, 60000)
 
 onMounted(() => {
   refresh()
   resume()
+  resumeRefresh()
 })
 
 onUnmounted(() => {
   pause()
+  pauseRefresh()
 })
 </script>
 
@@ -100,14 +112,14 @@ onUnmounted(() => {
       <!-- Header with Title and Actions -->
       <div class="flex flex-col items-center justify-between gap-4 border-b border-gray-100 p-4 sm:flex-row dark:border-gray-700">
         <h3 class="flex items-center gap-2 text-lg font-bold">
-          <div i-carbon-grid class="text-xl" />
+          <div class="i-carbon-grid text-xl" />
           土地详情
         </h3>
-        <div class="flex flex-wrap gap-2">
+        <div class="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
           <button
             v-for="op in operations"
             :key="op.type"
-            class="flex items-center gap-1.5 rounded px-3 py-1.5 text-sm text-white transition disabled:cursor-not-allowed disabled:opacity-50"
+            class="flex items-center justify-center gap-1.5 rounded px-3 py-2 text-sm text-white transition disabled:cursor-not-allowed disabled:opacity-50"
             :class="op.color"
             :disabled="operating"
             @click="handleOperate(op.type)"
@@ -121,7 +133,7 @@ onUnmounted(() => {
       <!-- Summary -->
       <div class="flex flex-wrap gap-4 border-b border-gray-100 bg-gray-50 p-4 text-sm dark:border-gray-700 dark:bg-gray-900/50">
         <div class="flex items-center gap-1.5 rounded-full bg-orange-100 px-3 py-1 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">
-          <div class="i-carbon-agriculture-analytics" />
+          <div class="i-carbon-clean" />
           <span class="font-medium">可收: {{ summary?.harvestable || 0 }}</span>
         </div>
         <div class="flex items-center gap-1.5 rounded-full bg-green-100 px-3 py-1 text-green-700 dark:bg-green-900/30 dark:text-green-400">

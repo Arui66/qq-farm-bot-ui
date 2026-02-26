@@ -4,20 +4,21 @@
 
 const protobuf = require('protobufjs');
 const { CONFIG, PlantPhase, PHASE_NAMES } = require('../config/config');
-const { types } = require('../utils/proto');
-const { sendMsgAsync, getUserState, networkEvents, getWsErrorState } = require('../utils/network');
-const { toLong, toNum, getServerTimeSec, toTimeSec, log, logWarn, sleep } = require('../utils/utils');
-const { recordOperation } = require('./stats');
 const { getPlantNameBySeedId, getPlantName, getPlantExp, formatGrowTime, getPlantGrowTime, getAllSeeds, getPlantById, getSeedImageBySeedId } = require('../config/gameConfig');
-const { getPlantRankings } = require('./analytics');
 const { isAutomationOn, getPreferredSeed, getAutomation, getPlantingStrategy } = require('../models/store');
+const { sendMsgAsync, getUserState, networkEvents, getWsErrorState } = require('../utils/network');
+const { types } = require('../utils/proto');
+const { toLong, toNum, getServerTimeSec, toTimeSec, log, logWarn, sleep } = require('../utils/utils');
+const { getPlantRankings } = require('./analytics');
+const { createScheduler } = require('./scheduler');
+const { recordOperation } = require('./stats');
 
 // ============ 内部状态 ============
 let isCheckingFarm = false;
 let isFirstFarmCheck = true;
-let farmCheckTimer = null;
 let farmLoopRunning = false;
 let externalSchedulerMode = false;
+const farmScheduler = createScheduler('farm');
 
 // ============ 农场 API ============
 
@@ -25,6 +26,18 @@ let externalSchedulerMode = false;
 let onOperationLimitsUpdate = null;
 function setOperationLimitsCallback(callback) {
     onOperationLimitsUpdate = callback;
+}
+
+/**
+ * 通用植物操作请求
+ */
+async function sendPlantRequest(RequestType, ReplyType, method, landIds, hostGid) {
+    const body = RequestType.encode(RequestType.create({
+        land_ids: landIds,
+        host_gid: toLong(hostGid),
+    })).finish();
+    const { body: replyBody } = await sendMsgAsync('gamepb.plantpb.PlantService', method, body);
+    return ReplyType.decode(replyBody);
 }
 
 async function getAllLands() {
@@ -51,32 +64,17 @@ async function harvest(landIds) {
 
 async function waterLand(landIds) {
     const state = getUserState();
-    const body = types.WaterLandRequest.encode(types.WaterLandRequest.create({
-        land_ids: landIds,
-        host_gid: toLong(state.gid),
-    })).finish();
-    const { body: replyBody } = await sendMsgAsync('gamepb.plantpb.PlantService', 'WaterLand', body);
-    return types.WaterLandReply.decode(replyBody);
+    return sendPlantRequest(types.WaterLandRequest, types.WaterLandReply, 'WaterLand', landIds, state.gid);
 }
 
 async function weedOut(landIds) {
     const state = getUserState();
-    const body = types.WeedOutRequest.encode(types.WeedOutRequest.create({
-        land_ids: landIds,
-        host_gid: toLong(state.gid),
-    })).finish();
-    const { body: replyBody } = await sendMsgAsync('gamepb.plantpb.PlantService', 'WeedOut', body);
-    return types.WeedOutReply.decode(replyBody);
+    return sendPlantRequest(types.WeedOutRequest, types.WeedOutReply, 'WeedOut', landIds, state.gid);
 }
 
 async function insecticide(landIds) {
     const state = getUserState();
-    const body = types.InsecticideRequest.encode(types.InsecticideRequest.create({
-        land_ids: landIds,
-        host_gid: toLong(state.gid),
-    })).finish();
-    const { body: replyBody } = await sendMsgAsync('gamepb.plantpb.PlantService', 'Insecticide', body);
-    return types.InsecticideReply.decode(replyBody);
+    return sendPlantRequest(types.InsecticideRequest, types.InsecticideReply, 'Insecticide', landIds, state.gid);
 }
 
 // 普通肥料 ID
@@ -98,7 +96,7 @@ async function fertilize(landIds, fertilizerId = NORMAL_FERTILIZER_ID) {
             })).finish();
             await sendMsgAsync('gamepb.plantpb.PlantService', 'Fertilize', body);
             successCount++;
-        } catch (e) {
+        } catch {
             // 施肥失败（可能肥料不足），停止继续
             break;
         }
@@ -462,7 +460,7 @@ async function getLandsDetail() {
                 needBug: status.needBug.length,
             },
         };
-    } catch (e) {
+    } catch {
         return { lands: [], summary: {} };
     }
 }
@@ -526,8 +524,6 @@ async function autoPlantEmptyLands(deadLandIds, emptyLandIds) {
         if (buyReply.get_items && buyReply.get_items.length > 0) {
             const gotItem = buyReply.get_items[0];
             const gotId = toNum(gotItem.id);
-            const gotCount = toNum(gotItem.count);
-            log('购买', `获得物品: id=${gotId} count=${gotCount}`);
             if (gotId > 0) actualSeedId = gotId;
         }
         if (buyReply.cost_items) {
@@ -609,14 +605,14 @@ function getCurrentPhase(phases, debug, landLabel) {
     const nowSec = getServerTimeSec();
 
     if (debug) {
-        console.log(`    ${landLabel} 服务器时间=${nowSec} (${new Date(nowSec * 1000).toLocaleTimeString()})`);
+        console.warn(`    ${landLabel} 服务器时间=${nowSec} (${new Date(nowSec * 1000).toLocaleTimeString()})`);
         for (let i = 0; i < phases.length; i++) {
             const p = phases[i];
             const bt = toTimeSec(p.begin_time);
             const phaseName = PHASE_NAMES[p.phase] || `阶段${p.phase}`;
             const diff = bt > 0 ? (bt - nowSec) : 0;
             const diffStr = diff > 0 ? `(未来 ${diff}s)` : diff < 0 ? `(已过 ${-diff}s)` : '';
-            console.log(`    ${landLabel}   [${i}] ${phaseName}(${p.phase}) begin=${bt} ${diffStr} dry=${toTimeSec(p.dry_time)} weed=${toTimeSec(p.weeds_time)} insect=${toTimeSec(p.insect_time)}`);
+            console.warn(`    ${landLabel}   [${i}] ${phaseName}(${p.phase}) begin=${bt} ${diffStr} dry=${toTimeSec(p.dry_time)} weed=${toTimeSec(p.weeds_time)} insect=${toTimeSec(p.insect_time)}`);
         }
     }
 
@@ -624,14 +620,14 @@ function getCurrentPhase(phases, debug, landLabel) {
         const beginTime = toTimeSec(phases[i].begin_time);
         if (beginTime > 0 && beginTime <= nowSec) {
             if (debug) {
-                console.log(`    ${landLabel}   → 当前阶段: ${PHASE_NAMES[phases[i].phase] || phases[i].phase}`);
+                console.warn(`    ${landLabel}   → 当前阶段: ${PHASE_NAMES[phases[i].phase] || phases[i].phase}`);
             }
             return phases[i];
         }
     }
 
     if (debug) {
-        console.log(`    ${landLabel}   → 所有阶段都在未来，使用第一个: ${PHASE_NAMES[phases[0].phase] || phases[0].phase}`);
+        console.warn(`    ${landLabel}   → 所有阶段都在未来，使用第一个: ${PHASE_NAMES[phases[0].phase] || phases[0].phase}`);
     }
     return phases[0];
 }
@@ -887,16 +883,12 @@ async function runFarmOperation(opType) {
 function scheduleNextFarmCheck(delayMs = CONFIG.farmCheckInterval) {
     if (externalSchedulerMode) return;
     if (!farmLoopRunning) return;
-    if (farmCheckTimer) {
-        clearTimeout(farmCheckTimer);
-        farmCheckTimer = null;
-    }
-    farmCheckTimer = setTimeout(async () => {
+    farmScheduler.setTimeoutTask('farm_check_loop', Math.max(0, delayMs), async () => {
         if (!farmLoopRunning) return;
         await checkFarm();
         if (!farmLoopRunning) return;
         scheduleNextFarmCheck(CONFIG.farmCheckInterval);
-    }, Math.max(0, delayMs));
+    });
 }
 
 function startFarmCheckLoop(options = {}) {
@@ -921,15 +913,15 @@ function onLandsChangedPush(lands) {
     log('农场', `收到推送: ${lands.length}块土地变化，检查中...`, {
         module: 'farm', event: 'lands_notify', result: 'trigger_check', count: lands.length
     });
-    setTimeout(async () => {
+    farmScheduler.setTimeoutTask('farm_push_check', 100, async () => {
         if (!isCheckingFarm) await checkFarm();
-    }, 100);
+    });
 }
 
 function stopFarmCheckLoop() {
     farmLoopRunning = false;
     externalSchedulerMode = false;
-    if (farmCheckTimer) { clearTimeout(farmCheckTimer); farmCheckTimer = null; }
+    farmScheduler.clearAll();
     networkEvents.removeListener('landsChanged', onLandsChangedPush);
 }
 
